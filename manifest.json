@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Duolingo CN Words Export Test",
+  "version": "0.1.0",
+  "description": "Adds a test button on duolingo.cn words page to fetch learned lexemes.",
+  "content_scripts": [
+    {
+      "matches": ["https://www.duolingo.cn/practice-hub/words*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "host_permissions": ["https://www.duolingo.cn/*"]
+}

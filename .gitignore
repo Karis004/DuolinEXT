@@ -1,0 +1,35 @@
+# Secrets and local configuration
+website/.env
+website/frontend/.env.local
+
+# Local learning database and generated runtime data
+website/backend/data/*
+*.db
+*.sqlite
+*.sqlite3
+
+# Dependencies and build output
+website/node_modules/
+website/frontend/node_modules/
+website/frontend/dist/
+
+# Python, test, and TypeScript caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+website/backend/**/__pycache__/
+website/frontend/*.tsbuildinfo
+
+# Local scratch material
+.tmp-reference/
+.DS_Store
+Thumbs.db
+
+# Local probe outputs and downloaded personal word data
+duolingo_words.json
+single_skill_probe_result.json
+single_skill_session_*_probe.json
+
+# TypeScript-generated config artifacts
+website/frontend/vite.config.js
+website/frontend/vite.config.d.ts
