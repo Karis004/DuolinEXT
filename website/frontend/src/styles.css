@@ -128,6 +128,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .connection-row .secondary-button { min-width: 84px; }
 .test-success { color: #177253; font-size: 11px; }
 .test-error { color: #a7473d; font-size: 11px; }
+.ai-error-details { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .voice-settings { display: grid; gap: 18px; }
 .voice-summary { display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 12px; align-items: center; }
 .voice-summary > div:last-child { display: grid; gap: 4px; }

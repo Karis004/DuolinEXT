@@ -9,6 +9,8 @@ from .ai import (
     AITransientError,
     AIValidationError,
     _chat_completions_url,
+    _format_ai_http_error,
+    _format_ai_network_error,
     _message_content_text,
 )
 from .config import AI_TIMEOUT_SECONDS, Settings
@@ -84,6 +86,7 @@ def test_ai_connection(settings: Settings) -> dict:
         request_body["reasoning_effort"] = settings.ai_reasoning_effort
 
     started = monotonic()
+    timeout_seconds = min(AI_TIMEOUT_SECONDS, 15)
     try:
         response = httpx.post(
             _chat_completions_url(settings.ai_base_url),
@@ -92,17 +95,20 @@ def test_ai_connection(settings: Settings) -> dict:
                 "Content-Type": "application/json",
             },
             json=request_body,
-            timeout=httpx.Timeout(min(AI_TIMEOUT_SECONDS, 15), connect=5.0),
+            timeout=httpx.Timeout(timeout_seconds, connect=5.0),
         )
     except httpx.TimeoutException as exc:
-        raise AITransientError("AI 连接测试超时。") from exc
+        raise AITransientError(
+            f"AI 连接检测超时（上限 {timeout_seconds:g} 秒）。\n"
+            + _format_ai_network_error(exc, settings, "AI 连接检测")
+        ) from exc
     except httpx.RequestError as exc:
-        raise AITransientError(f"AI 连接失败：{exc.__class__.__name__}。") from exc
+        raise AITransientError(_format_ai_network_error(exc, settings, "AI 连接检测")) from exc
 
     if response.status_code in {401, 403}:
-        raise AIConfigurationError(f"AI 鉴权失败（HTTP {response.status_code}）。")
+        raise AIConfigurationError(_format_ai_http_error(response, settings, "AI 连接检测"))
     if response.status_code >= 400:
-        raise AIError(f"AI 服务返回 HTTP {response.status_code}。")
+        raise AIError(_format_ai_http_error(response, settings, "AI 连接检测"))
 
     try:
         answer = _message_content_text(response.json()["choices"][0]["message"]).strip()

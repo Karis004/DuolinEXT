@@ -144,6 +144,17 @@ npm --prefix frontend run build
 
 构建结果位于 `website/frontend/dist/`，依赖、缓存、构建产物和本地数据库均不提交 Git。
 
+## 本地调试 AI
+
+在项目的 `website/` 目录运行 `npm.cmd run dev`（Linux/macOS 为 `npm run dev`），同时启动带热重载的后端与前端。浏览器打开 <http://127.0.0.1:5173/>；后端运行日志会在同一个终端以 `backend` 前缀显示。只做 AI 连接检测时，不会同步多邻国或改动学习数据库。
+
+1. 在 `website/.env` 中修改 `AI_BASE_URL`、`AI_MODEL` 等配置。不要将 API key 粘贴到聊天、截图或 GitHub。
+2. 在网页“设置”中点击“重新读取配置”，再点击 AI 服务的“检测”。本地后端会重新读取 `.env`；如果改的是容器的 `env_file`，则需重建容器。
+3. 失败时页面会显示本地 HTTP 状态、上游 HTTP 状态、请求 ID 和上游原始响应正文。正文保留换行与完整长度，只遮盖已配置的密钥。AI 老师的报错也会按同样方式显示。
+4. 需要独立检查后端时，在另一个终端运行 `curl.exe -i -X POST http://127.0.0.1:8000/api/settings/test-ai`（Linux/macOS 用 `curl`）。也可按 `F12` 打开浏览器开发者工具，在 Network 中查看 `test-ai` 或 `tutor/ask` 请求及 Response；不要分享包含凭据的请求头。
+
+本地调试完成后按 `Ctrl+C` 停止 `npm.cmd run dev`。如果 `8000` 或 `5173` 已被旧进程占用，先关闭旧的开发服务再启动一次。
+
 ## 部署说明
 
 前端可以由 Nginx、Caddy 或其他静态文件服务器托管，并将 `/api` 反向代理到 FastAPI。当前应用是单用户本地工具，没有登录、用户隔离和权限系统；部署到公网前必须补充认证、HTTPS、限流和严格的 CORS 配置。

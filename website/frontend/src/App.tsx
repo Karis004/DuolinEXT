@@ -58,14 +58,24 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
   let response: Response
   try {
     response = await fetch(`${API_BASE}${path}`, options)
-  } catch {
-    throw new Error('无法连接本地后端。请确认 DuolinEXT 开发服务仍在运行。')
+  } catch (caught) {
+    const detail = caught instanceof Error ? caught.message : String(caught)
+    throw new Error(`无法连接后端：${detail}`)
   }
   if (!response.ok) {
-    const body = await response.json().catch(() => null)
-    const detail = body?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message
-    throw new Error(message ?? `请求失败（HTTP ${response.status}）`)
+    const raw = await response.text()
+    let body: unknown = null
+    try {
+      body = JSON.parse(raw)
+    } catch {
+      // Reverse proxies can return plain text or HTML errors.
+    }
+    const parsed = body && typeof body === 'object' ? body as Record<string, unknown> : null
+    const detail = parsed?.detail
+    const message = typeof detail === 'string'
+      ? detail
+      : body !== null ? JSON.stringify(body, null, 2) : raw
+    throw new Error(`HTTP ${response.status} ${response.statusText}\n${message || '服务端未返回错误内容。'}`)
   }
   return response.json()
 }
@@ -446,7 +456,7 @@ function TutorDrawer({
         ))}
         {sending && <div className="tutor-message assistant"><span>AI</span><p><LoaderCircle size={15} className="spinning" />正在回答</p></div>}
       </div>
-      {error && <div className="inline-error">{error}</div>}
+      {error && <div className="inline-error ai-error-details" role="alert">{error}</div>}
       <form className="tutor-form" onSubmit={(event) => { event.preventDefault(); void send() }}>
         {selectedText && messages.length === 0 && <button type="button" className="tutor-suggestion" onClick={() => void send('请简短解释这段内容。')}>解释这段</button>}
         <div><input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="问一个具体问题" disabled={sending} /><button className="primary-button" type="submit" disabled={!question.trim() || sending} title="发送"><ChevronRight size={17} /></button></div>
@@ -569,7 +579,7 @@ function SettingsPanel({
 
         <div className="settings-body">
           <section className="settings-section">
-            <div className="settings-section-heading"><Server size={18} /><div><h3>服务连接</h3><p>状态来自后端当前加载的 `.env`。修改文件后点击重新读取即可，无需重启；数据库路径变更仍需重启服务。</p></div></div>
+            <div className="settings-section-heading"><Server size={18} /><div><h3>服务连接</h3><p>状态来自后端当前配置。本地开发修改 `website/.env` 后可点击重新读取；Docker 部署修改配置后需重建容器。</p></div></div>
             <div className="settings-actions">
               <button className="secondary-button" onClick={() => void reloadConfiguration()} disabled={reloading || testing !== null}>
                 {reloading ? <LoaderCircle size={15} className="spinning" /> : <RefreshCw size={15} />}重新读取配置
@@ -605,7 +615,7 @@ function SettingsPanel({
                     <strong>AI 服务</strong>
                     <span>Key {configuration.ai.apiKeyConfigured ? '已配置' : '未配置'} · {configuration.ai.endpoint ?? 'URL 未配置'} · {configuration.ai.model ?? '模型未配置'} · reasoning {configuration.ai.reasoningEffort}</span>
                     {testResults.ai && <small className="test-success">连接正常 · {testResults.ai.latencyMs} ms · {testResults.ai.message}</small>}
-                    {testErrors.ai && <small className="test-error">{testErrors.ai}</small>}
+                    {testErrors.ai && <div className="test-error ai-error-details" role="alert">{testErrors.ai}</div>}
                   </div>
                   <button className="secondary-button" disabled={!configuration.ai.configured || testing !== null} onClick={() => void testConnection('ai')}>
                     {testing === 'ai' ? <LoaderCircle size={15} className="spinning" /> : <RefreshCw size={15} />}检测

@@ -59,6 +59,36 @@ def _chat_completions_url(base_url: str) -> str:
     return f"{base}/chat/completions"
 
 
+def _redact_ai_error(text: str, settings: Settings) -> str:
+    for secret in (settings.ai_api_key, settings.duolingo_jwt):
+        if secret:
+            text = text.replace(secret, "[已隐藏的密钥]")
+    return text
+
+
+def _format_ai_http_error(response: httpx.Response, settings: Settings, action: str) -> str:
+    status = f"HTTP {response.status_code} {response.reason_phrase}".strip()
+    request_id = next(
+        (
+            response.headers[name]
+            for name in ("x-request-id", "x-correlation-id", "cf-ray", "x-amzn-requestid")
+            if response.headers.get(name)
+        ),
+        None,
+    )
+    body = _redact_ai_error(response.text, settings)
+    parts = [f"{action}失败（{status}）"]
+    if request_id:
+        parts.append(f"请求 ID：{request_id}")
+    parts.append(f"服务端原始响应：\n{body if body.strip() else '（空响应）'}")
+    return "\n".join(parts)
+
+
+def _format_ai_network_error(exc: httpx.RequestError, settings: Settings, action: str) -> str:
+    detail = _redact_ai_error(str(exc), settings).strip()
+    return f"{action}网络请求失败（{exc.__class__.__name__}）：{detail or '没有更多错误信息'}"
+
+
 def _message_content_text(message: object) -> str:
     if not isinstance(message, dict):
         return ""
@@ -455,26 +485,21 @@ def _request_ai_json(
         )
     except httpx.TimeoutException as exc:
         raise AITransientError(
-            f"AI 请求超时（超过 {effective_timeout:g} 秒）。"
+            f"AI 请求超时（上限 {effective_timeout:g} 秒）。\n"
+            + _format_ai_network_error(exc, settings, "AI")
         ) from exc
     except httpx.RequestError as exc:
-        raise AITransientError(f"AI 网络请求失败：{exc.__class__.__name__}。") from exc
+        raise AITransientError(_format_ai_network_error(exc, settings, "AI")) from exc
     if response.status_code in (401, 403):
-        raise AIConfigurationError(f"AI 鉴权失败（HTTP {response.status_code}）。")
+        raise AIConfigurationError(_format_ai_http_error(response, settings, "AI 鉴权"))
     if response.status_code >= 400:
-        detail = response.text.strip().replace("\n", " ")
-        if len(detail) > 240:
-            detail = f"{detail[:240]}..."
         error_type = (
             AITransientError
             if response.status_code in {408, 409, 425, 429}
             or response.status_code >= 500
             else AIError
         )
-        raise error_type(
-            f"AI 请求失败（HTTP {response.status_code}）："
-            f"{detail or '服务端未返回详情'}"
-        )
+        raise error_type(_format_ai_http_error(response, settings, "AI 请求"))
 
     try:
         payload = response.json()
@@ -532,6 +557,7 @@ def ask_tutor(
         request_body["reasoning_effort"] = settings.ai_reasoning_effort
     if not settings.ai_configured:
         raise AIConfigurationError("AI_API_KEY、AI_BASE_URL、AI_MODEL 尚未配置完整。")
+    tutor_timeout = min(AI_TIMEOUT_SECONDS, 35)
     try:
         response = httpx.post(
             _chat_completions_url(settings.ai_base_url),
@@ -540,14 +566,17 @@ def ask_tutor(
                 "Content-Type": "application/json",
             },
             json=request_body,
-            timeout=httpx.Timeout(min(AI_TIMEOUT_SECONDS, 35), connect=5.0),
+            timeout=httpx.Timeout(tutor_timeout, connect=5.0),
         )
     except httpx.TimeoutException as exc:
-        raise AITransientError("AI 辅导请求超时。") from exc
+        raise AITransientError(
+            f"AI 辅导请求超时（上限 {tutor_timeout:g} 秒）。\n"
+            + _format_ai_network_error(exc, settings, "AI 辅导")
+        ) from exc
     except httpx.RequestError as exc:
-        raise AITransientError("AI 辅导网络请求失败。") from exc
+        raise AITransientError(_format_ai_network_error(exc, settings, "AI 辅导")) from exc
     if response.status_code >= 400:
-        raise AIError(f"AI 辅导请求失败（HTTP {response.status_code}）。")
+        raise AIError(_format_ai_http_error(response, settings, "AI 辅导请求"))
     try:
         answer = _message_content_text(response.json()["choices"][0]["message"]).strip()
     except (KeyError, IndexError, TypeError, ValueError) as exc:
