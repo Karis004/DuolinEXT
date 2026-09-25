@@ -14,7 +14,7 @@ from .ai import (
     generate_lesson_content,
     generate_outline_content,
 )
-from .config import Settings
+from .config import AI_MAX_ATTEMPTS, AI_RETRY_BASE_SECONDS, Settings
 from .models import CourseSkill, GenerationTask, SessionLesson, SkillSession
 from .session_service import (
     get_or_create_session_lesson,
@@ -36,7 +36,7 @@ def _run_ai_generator(
     request_kind: str,
     **kwargs,
 ) -> dict:
-    transient_limit = max(1, settings.ai_max_attempts)
+    transient_limit = max(1, AI_MAX_ATTEMPTS)
     validation_limit = min(2, transient_limit)
     attempt = 0
     started = time.monotonic()
@@ -60,7 +60,7 @@ def _run_ai_generator(
             if attempt >= limit:
                 message = f"{exc}（已尝试 {attempt} 次）"
                 raise exc.__class__(message) from exc
-            delay = max(0.0, settings.ai_retry_base_seconds) * (2 ** (attempt - 1))
+            delay = max(0.0, AI_RETRY_BASE_SECONDS) * (2 ** (attempt - 1))
             logger.warning(
                 "AI %s attempt %d/%d failed after %.1fs: %s; retrying in %.1fs",
                 request_kind,

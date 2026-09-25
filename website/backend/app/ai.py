@@ -3,7 +3,7 @@ import re
 
 import httpx
 
-from .config import Settings
+from .config import AI_TIMEOUT_SECONDS, Settings
 
 LESSON_PROMPT_VERSION = 3
 OUTLINE_PROMPT_VERSION = 2
@@ -442,7 +442,7 @@ def _request_ai_json(
     if use_reasoning and settings.ai_reasoning_effort:
         request_body["reasoning_effort"] = settings.ai_reasoning_effort
 
-    effective_timeout = timeout_seconds or settings.ai_timeout_seconds
+    effective_timeout = timeout_seconds or AI_TIMEOUT_SECONDS
     try:
         response = httpx.post(
             _chat_completions_url(settings.ai_base_url),
@@ -487,7 +487,7 @@ def _request_ai_json(
         raise AIValidationError("AI 响应结构中没有有效的课程内容。") from exc
 
 
-TUTOR_SYSTEM_PROMPT = """你是 DuolinEx 的法语学习即时辅导老师。
+TUTOR_SYSTEM_PROMPT = """你是 DuolinEXT 的法语学习即时辅导老师。
 用户正在学习法语。只回答用户当前的小问题，优先使用中文，必要时保留法语例子。
 回答准确、直接、简短，通常不超过 120 字；不要复述上下文，不要写课程总结，不要展开无关语法。
 如果问题信息不足，明确指出需要补充什么。只返回纯文本，不要 Markdown 标题。"""
@@ -528,6 +528,8 @@ def ask_tutor(
         ],
         "max_tokens": 320,
     }
+    if settings.ai_reasoning_effort:
+        request_body["reasoning_effort"] = settings.ai_reasoning_effort
     if not settings.ai_configured:
         raise AIConfigurationError("AI_API_KEY、AI_BASE_URL、AI_MODEL 尚未配置完整。")
     try:
@@ -538,7 +540,7 @@ def ask_tutor(
                 "Content-Type": "application/json",
             },
             json=request_body,
-            timeout=httpx.Timeout(min(settings.ai_timeout_seconds, 35), connect=5.0),
+            timeout=httpx.Timeout(min(AI_TIMEOUT_SECONDS, 35), connect=5.0),
         )
     except httpx.TimeoutException as exc:
         raise AITransientError("AI 辅导请求超时。") from exc
@@ -579,7 +581,7 @@ def generate_vocabulary_profiles(settings: Settings, words: list[dict]) -> list[
         settings,
         prompt,
         system_prompt=VOCABULARY_SYSTEM_PROMPT,
-        timeout_seconds=min(settings.ai_timeout_seconds, 30),
+        timeout_seconds=min(AI_TIMEOUT_SECONDS, 30),
         use_reasoning=False,
     )
     items = result.get("items")

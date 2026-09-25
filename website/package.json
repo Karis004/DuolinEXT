@@ -1,5 +1,5 @@
 {
-  "name": "duolinex",
+  "name": "duolinext",
   "private": true,
   "version": "0.1.0",
   "scripts": {
@@ -12,4 +12,3 @@
     "concurrently": "^9.2.1"
   }
 }
-

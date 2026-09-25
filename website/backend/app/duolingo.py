@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .config import Settings
+from .config import DUOLINGO_PAGE_SIZE, Settings
 
 
 @dataclass
@@ -33,12 +33,15 @@ class DuolingoClient:
         token = self.settings.duolingo_jwt.strip()
         if not token:
             raise DuolingoError("token_missing", "未配置 DUOLINGO_JWT。")
+        user_id = self.settings.duolingo_user_id.strip()
+        if not user_id:
+            raise DuolingoError("user_id_missing", "未配置 DUOLINGO_USER_ID。")
 
         headers = {
             "Accept": "application/json; charset=UTF-8",
             "Accept-Language": "zh-CN,zh;q=0.9",
             "Authorization": f"Bearer {token}",
-            "X-Amzn-Trace-Id": f"User={self.settings.duolingo_user_id}",
+            "X-Amzn-Trace-Id": f"User={user_id}",
             "X-Requested-With": "XMLHttpRequest",
             "Referer": "https://www.duolingo.cn/practice-hub/words",
             "User-Agent": (
@@ -57,7 +60,7 @@ class DuolingoClient:
                 json.dump(body, temp_body, ensure_ascii=False)
                 temp_body_path = temp_body.name
 
-        marker = "\n__DUOLINEX_HTTP_STATUS__:%{http_code}"
+        marker = "\n__DUOLINEXT_HTTP_STATUS__:%{http_code}"
         command = [
             "curl",
             "--silent",
@@ -96,7 +99,7 @@ class DuolingoClient:
             detail = completed.stderr.strip() or "curl 未返回错误详情"
             raise DuolingoError("request_failed", f"多邻国网络请求失败：{detail}")
 
-        status_marker = "__DUOLINEX_HTTP_STATUS__:"
+        status_marker = "__DUOLINEXT_HTTP_STATUS__:"
         if status_marker not in completed.stdout:
             raise DuolingoError("invalid_response", "多邻国响应中缺少 HTTP 状态码。")
 
@@ -326,7 +329,7 @@ class DuolingoClient:
                 f"{self.settings.duolingo_user_id}/courses/"
                 f"{self.settings.duolingo_course_id}/{self.settings.duolingo_from_language}"
                 "/learned-lexemes"
-                f"?limit={self.settings.duolingo_page_size}"
+                f"?limit={DUOLINGO_PAGE_SIZE}"
                 f"&sortBy=LEARNED_DATE&startIndex={start_index}"
             )
             page = self._request_json("POST", url, payload)

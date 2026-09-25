@@ -3,10 +3,24 @@ from pathlib import Path
 from sqlalchemy import inspect
 from sqlmodel import Session, SQLModel, create_engine
 
-from .config import get_settings
+from .config import DEFAULT_DATABASE_PATH, LEGACY_DATABASE_PATH, get_settings
+
+
+def migrate_legacy_database_file(
+    database_url: str,
+    legacy_path: Path = LEGACY_DATABASE_PATH,
+    target_path: Path = DEFAULT_DATABASE_PATH,
+) -> bool:
+    default_url = f"sqlite:///{target_path.as_posix()}"
+    if database_url != default_url or target_path.exists() or not legacy_path.exists():
+        return False
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.replace(target_path)
+    return True
 
 
 settings = get_settings()
+migrate_legacy_database_file(settings.database_url)
 if settings.database_url.startswith("sqlite:///"):
     database_path = Path(settings.database_url.removeprefix("sqlite:///"))
     database_path.parent.mkdir(parents=True, exist_ok=True)

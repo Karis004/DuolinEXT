@@ -7,7 +7,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, col, func, select
 
-from .config import Settings, get_settings
+from .config import Settings, get_settings, reload_settings
 from .database import create_db_and_tables, engine, get_session
 from .duolingo import DuolingoError
 from .generation_service import (
@@ -23,7 +23,12 @@ from .generation_service import (
     run_generation_batch,
 )
 from .models import CourseSkill, SkillSession, SyncRun, VocabularyTask, Word
-from .ai import AIError, ask_tutor
+from .ai import AIConfigurationError, AIError, ask_tutor
+from .settings_service import (
+    settings_status,
+    test_ai_connection,
+    test_duolingo_connection,
+)
 from .vocabulary_service import (
     active_vocabulary_task,
     create_vocabulary_task,
@@ -79,7 +84,7 @@ def _run_sync_generation_pipeline(
         run_vocabulary_batch(word_ids, settings, vocabulary_task_id)
 
 
-app = FastAPI(title="DuolinEx API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="DuolinEXT API", version="0.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -162,6 +167,50 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/api/settings/status")
+def configuration_status(settings: Settings = Depends(get_settings)) -> dict:
+    return settings_status(settings)
+
+
+@app.post("/api/settings/reload")
+def reload_configuration() -> dict:
+    settings = reload_settings()
+    return {
+        "success": True,
+        "message": "已重新读取 .env 配置。",
+        "configuration": settings_status(settings),
+    }
+
+
+@app.post("/api/settings/test-ai")
+def check_ai_connection(settings: Settings = Depends(get_settings)) -> dict:
+    try:
+        return test_ai_connection(settings)
+    except AIConfigurationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except AIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/settings/test-duolingo")
+def check_duolingo_connection(
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    if sync_in_progress(session):
+        raise HTTPException(status_code=409, detail="多邻国同步正在进行，请稍后再检测。")
+    try:
+        return test_duolingo_connection(settings)
+    except DuolingoError as exc:
+        if exc.code in {"token_missing", "user_id_missing"}:
+            status_code = 400
+        elif exc.code == "auth_failed":
+            status_code = 401
+        else:
+            status_code = 502
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
+
+
 @app.get("/api/dashboard")
 def dashboard(
     selected_session_id: int | None = None,
@@ -229,7 +278,7 @@ def sync_duolingo(
         session.add(sync_run)
         session.commit()
         raise HTTPException(
-            status_code=401 if exc.code in {"token_missing", "auth_failed"} else 502,
+            status_code=401 if exc.code in {"token_missing", "user_id_missing", "auth_failed"} else 502,
             detail={"code": exc.code, "message": exc.message},
         ) from exc
 

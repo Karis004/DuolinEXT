@@ -17,14 +17,25 @@ import {
   RotateCcw,
   RefreshCw,
   ScrollText,
+  Settings as SettingsIcon,
   Sparkles,
+  AlertCircle,
+  Server,
+  Play,
   Volume2,
   X,
   MessageCircle,
   Library,
 } from 'lucide-react'
-import { playFrench } from './audio/frenchAudio'
+import {
+  getFrenchVoiceStatus,
+  playFrench,
+  setFrenchVoicePreference,
+} from './audio/frenchAudio'
+import type { FrenchVoiceStatus } from './audio/frenchAudio'
 import type {
+  ConfigurationStatus,
+  ConnectionTestResult,
   CourseSkill,
   DashboardData,
   LessonContent,
@@ -36,17 +47,19 @@ import type {
 } from './types'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
-const SELECTED_SESSION_KEY = 'duolinex.selectedSessionId'
+const SELECTED_SESSION_KEY = 'duolinext.selectedSessionId'
+const LEGACY_SELECTED_SESSION_KEY = 'duolinex.selectedSessionId'
 
 type Operation = 'sync' | 'load' | 'generate' | 'upgrade' | 'retry' | 'generate-missing' | 'cancel' | 'complete' | null
 type LessonMode = 'pronunciation' | 'study'
+type ConnectionTarget = 'duolingo' | 'ai'
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   let response: Response
   try {
     response = await fetch(`${API_BASE}${path}`, options)
   } catch {
-    throw new Error('无法连接本地后端。请确认 DuolinEx 开发服务仍在运行。')
+    throw new Error('无法连接本地后端。请确认 DuolinEXT 开发服务仍在运行。')
   }
   if (!response.ok) {
     const body = await response.json().catch(() => null)
@@ -459,6 +472,188 @@ function SelectionActions({
   )
 }
 
+function SettingsPanel({
+  voiceStatus,
+  onVoiceStatusChange,
+  onClose,
+}: {
+  voiceStatus: FrenchVoiceStatus | null
+  onVoiceStatusChange: (status: FrenchVoiceStatus) => void
+  onClose: () => void
+}) {
+  const [configuration, setConfiguration] = useState<ConfigurationStatus | null>(null)
+  const [configurationError, setConfigurationError] = useState('')
+  const [testing, setTesting] = useState<ConnectionTarget | null>(null)
+  const [testResults, setTestResults] = useState<Partial<Record<ConnectionTarget, ConnectionTestResult>>>({})
+  const [testErrors, setTestErrors] = useState<Partial<Record<ConnectionTarget, string>>>({})
+  const [voiceTesting, setVoiceTesting] = useState(false)
+  const [voiceMessage, setVoiceMessage] = useState('')
+  const [reloading, setReloading] = useState(false)
+  const [reloadMessage, setReloadMessage] = useState('')
+
+  useEffect(() => {
+    void api<ConfigurationStatus>('/api/settings/status')
+      .then(setConfiguration)
+      .catch((caught) => setConfigurationError(caught instanceof Error ? caught.message : '配置状态加载失败'))
+  }, [])
+
+  const testConnection = async (target: ConnectionTarget) => {
+    setTesting(target)
+    setTestErrors((current) => ({ ...current, [target]: undefined }))
+    setTestResults((current) => ({ ...current, [target]: undefined }))
+    try {
+      const result = await api<ConnectionTestResult>(`/api/settings/test-${target}`, { method: 'POST' })
+      setTestResults((current) => ({ ...current, [target]: result }))
+    } catch (caught) {
+      setTestErrors((current) => ({
+        ...current,
+        [target]: caught instanceof Error ? caught.message : '连接检测失败',
+      }))
+    } finally {
+      setTesting(null)
+    }
+  }
+
+  const reloadConfiguration = async () => {
+    setReloading(true)
+    setReloadMessage('')
+    setConfigurationError('')
+    setTestErrors({})
+    setTestResults({})
+    try {
+      const result = await api<{ configuration: ConfigurationStatus; message: string }>('/api/settings/reload', { method: 'POST' })
+      setConfiguration(result.configuration)
+      setReloadMessage(result.message)
+    } catch (caught) {
+      setConfigurationError(caught instanceof Error ? caught.message : '配置重新读取失败')
+    } finally {
+      setReloading(false)
+    }
+  }
+
+  const changeVoice = async (preference: string) => {
+    setFrenchVoicePreference(preference)
+    setVoiceMessage('')
+    onVoiceStatusChange(await getFrenchVoiceStatus())
+  }
+
+  const testVoice = async () => {
+    setVoiceTesting(true)
+    setVoiceMessage('')
+    try {
+      await playFrench('Bonjour, bienvenue dans DuolinEXT.')
+      setVoiceMessage('法语语音播放正常。')
+    } catch (caught) {
+      setVoiceMessage(caught instanceof Error ? caught.message : '语音测试失败。')
+    } finally {
+      setVoiceTesting(false)
+    }
+  }
+
+  const onlineVoiceCount = voiceStatus?.voices.filter((voice) => !voice.local).length ?? 0
+  const localVoiceCount = voiceStatus?.voices.filter((voice) => voice.local).length ?? 0
+  const userAgent = navigator.userAgent.toLowerCase()
+  const installHint = userAgent.includes('windows')
+    ? '打开 Windows 设置 > 时间和语言 > 语言和区域，添加法语并安装“语音”，完成后重启浏览器。'
+    : userAgent.includes('mac os')
+      ? '打开系统设置 > 辅助功能 > 朗读内容 > 系统声音，在声音管理中下载法语声音，然后重启浏览器。'
+      : '请在系统语言或辅助功能设置中安装法语语音，然后重启浏览器。'
+
+  return (
+    <div className="settings-overlay" role="presentation">
+      <div className="settings-panel" role="dialog" aria-modal="true" aria-label="设置">
+        <header className="settings-heading">
+          <div><span className="eyebrow">Configuration</span><h2>设置</h2></div>
+          <button className="drawer-close" onClick={onClose} title="关闭设置"><X size={20} /></button>
+        </header>
+
+        <div className="settings-body">
+          <section className="settings-section">
+            <div className="settings-section-heading"><Server size={18} /><div><h3>服务连接</h3><p>状态来自后端当前加载的 `.env`。修改文件后点击重新读取即可，无需重启；数据库路径变更仍需重启服务。</p></div></div>
+            <div className="settings-actions">
+              <button className="secondary-button" onClick={() => void reloadConfiguration()} disabled={reloading || testing !== null}>
+                {reloading ? <LoaderCircle size={15} className="spinning" /> : <RefreshCw size={15} />}重新读取配置
+              </button>
+              {reloadMessage && <small className="test-success">{reloadMessage}</small>}
+            </div>
+            {configurationError && <div className="inline-error">{configurationError}</div>}
+            {!configuration && !configurationError && <div className="settings-loading"><LoaderCircle size={16} className="spinning" />正在读取配置</div>}
+            {configuration && (
+              <div className="connection-list">
+                <div className="connection-row">
+                  <div className={`status-icon ${configuration.duolingo.configured ? 'ready' : 'missing'}`}>
+                    {configuration.duolingo.configured ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
+                  </div>
+                  <div className="connection-copy">
+                    <strong>多邻国</strong>
+                    <span>
+                      JWT {configuration.duolingo.jwtConfigured ? '已配置' : '未配置'} · 用户 {configuration.duolingo.userIdHint ?? '未配置'} · {configuration.duolingo.courseId ?? '—'} ← {configuration.duolingo.fromLanguage ?? '—'}
+                    </span>
+                    {testResults.duolingo && <small className="test-success">连接正常 · {testResults.duolingo.latencyMs} ms · 读取到 {testResults.duolingo.skillCount ?? 0} 个 Skill</small>}
+                    {testErrors.duolingo && <small className="test-error">{testErrors.duolingo}</small>}
+                  </div>
+                  <button className="secondary-button" disabled={!configuration.duolingo.configured || testing !== null} onClick={() => void testConnection('duolingo')}>
+                    {testing === 'duolingo' ? <LoaderCircle size={15} className="spinning" /> : <RefreshCw size={15} />}检测
+                  </button>
+                </div>
+
+                <div className="connection-row">
+                  <div className={`status-icon ${configuration.ai.configured ? 'ready' : 'missing'}`}>
+                    {configuration.ai.configured ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
+                  </div>
+                  <div className="connection-copy">
+                    <strong>AI 服务</strong>
+                    <span>Key {configuration.ai.apiKeyConfigured ? '已配置' : '未配置'} · {configuration.ai.endpoint ?? 'URL 未配置'} · {configuration.ai.model ?? '模型未配置'} · reasoning {configuration.ai.reasoningEffort}</span>
+                    {testResults.ai && <small className="test-success">连接正常 · {testResults.ai.latencyMs} ms · {testResults.ai.message}</small>}
+                    {testErrors.ai && <small className="test-error">{testErrors.ai}</small>}
+                  </div>
+                  <button className="secondary-button" disabled={!configuration.ai.configured || testing !== null} onClick={() => void testConnection('ai')}>
+                    {testing === 'ai' ? <LoaderCircle size={15} className="spinning" /> : <RefreshCw size={15} />}检测
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+
+          <section className="settings-section">
+            <div className="settings-section-heading"><Volume2 size={18} /><div><h3>法语语音</h3><p>单词优先使用多邻国原音；例句和无原音内容使用这里选择的语音。</p></div></div>
+            {voiceStatus ? (
+              <div className="voice-settings">
+                <div className="voice-summary">
+                  <div className={`status-icon ${voiceStatus.supported && voiceStatus.voices.length ? 'ready' : 'missing'}`}>
+                    {voiceStatus.supported && voiceStatus.voices.length ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
+                  </div>
+                  <div>
+                    <strong>{voiceStatus.selectedVoice ? voiceStatus.selectedVoice.name : '未找到法语语音'}</strong>
+                    <span>{onlineVoiceCount} 个浏览器在线语音 · {localVoiceCount} 个设备本地语音</span>
+                  </div>
+                </div>
+                {voiceStatus.voices.length > 0 ? (
+                  <div className="voice-controls">
+                    <label htmlFor="french-voice">朗读语音</label>
+                    <select id="french-voice" value={voiceStatus.preference} onChange={(event) => void changeVoice(event.target.value)}>
+                      <option value="auto">自动（在线优先，本地回退）</option>
+                      {voiceStatus.voices.map((voice) => (
+                        <option value={voice.voiceURI} key={voice.voiceURI}>{voice.name} · {voice.lang} · {voice.local ? '本地' : '在线'}</option>
+                      ))}
+                    </select>
+                    <button className="secondary-button" onClick={() => void testVoice()} disabled={voiceTesting}>
+                      {voiceTesting ? <LoaderCircle size={15} className="spinning" /> : <Play size={15} />}试听
+                    </button>
+                  </div>
+                ) : (
+                  <div className="voice-guidance"><AlertCircle size={17} /><p>{installHint}</p></div>
+                )}
+                {voiceMessage && <div className={voiceMessage.includes('正常') ? 'test-success voice-message' : 'test-error voice-message'}>{voiceMessage}</div>}
+              </div>
+            ) : <div className="settings-loading"><LoaderCircle size={16} className="spinning" />正在检测浏览器语音</div>}
+          </section>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function VocabularyPanel({ data, onClose }: { data: VocabularyData | null; onClose: () => void }) {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('全部')
@@ -825,6 +1020,8 @@ export default function App() {
   const [error, setError] = useState('')
   const [pathOpen, setPathOpen] = useState(false)
   const [outlineOpen, setOutlineOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [voiceStatus, setVoiceStatus] = useState<FrenchVoiceStatus | null>(null)
 
   const today = useMemo(
     () => new Intl.DateTimeFormat('zh-CN', { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date()),
@@ -833,11 +1030,32 @@ export default function App() {
 
   useEffect(() => {
     const savedSessionId = window.localStorage.getItem(SELECTED_SESSION_KEY)
+      ?? window.localStorage.getItem(LEGACY_SELECTED_SESSION_KEY)
+    if (savedSessionId) {
+      window.localStorage.setItem(SELECTED_SESSION_KEY, savedSessionId)
+      window.localStorage.removeItem(LEGACY_SELECTED_SESSION_KEY)
+    }
     const query = savedSessionId ? `?selected_session_id=${encodeURIComponent(savedSessionId)}` : ''
     void api<DashboardData>(`/api/dashboard${query}`)
       .then((payload) => setData(payload))
       .catch((caught) => setError(caught instanceof Error ? caught.message : '加载失败'))
       .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    const refreshVoices = () => {
+      void getFrenchVoiceStatus().then((status) => {
+        if (active) setVoiceStatus(status)
+      })
+    }
+    refreshVoices()
+    if (!('speechSynthesis' in window)) return () => { active = false }
+    window.speechSynthesis.addEventListener('voiceschanged', refreshVoices)
+    return () => {
+      active = false
+      window.speechSynthesis.removeEventListener('voiceschanged', refreshVoices)
+    }
   }, [])
 
   useEffect(() => {
@@ -945,7 +1163,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand"><span className="brand-mark">DX</span><span>DuolinEx</span></div>
+        <div className="brand"><span className="brand-mark">DXT</span><span>DuolinEXT</span></div>
         <span className="today-label">{today}</span>
         <div className="topbar-actions">
           <button className="outline-button" onClick={() => setOutlineOpen(true)}>
@@ -954,6 +1172,7 @@ export default function App() {
             {((data?.generation.outdatedLessons ?? 0) + (data?.generation.failedLessons ?? 0)) > 0 && <b>{(data?.generation.outdatedLessons ?? 0) + (data?.generation.failedLessons ?? 0)}</b>}
           </button>
           <button className="outline-button" onClick={() => setVocabularyOpen(true)} title="打开词汇表"><Library size={16} /><span>词汇表</span></button>
+          <button className="settings-button" onClick={() => setSettingsOpen(true)} title="打开设置" aria-label="打开设置"><SettingsIcon size={18} /></button>
           <button className="path-toggle" onClick={() => setPathOpen(true)} title="打开课程路径"><Menu size={18} /></button>
           <button
             className="sync-button"
@@ -964,12 +1183,20 @@ export default function App() {
             }}
           >
             <RefreshCw size={16} className={operation === 'sync' ? 'spinning' : ''} />
-            {operation === 'sync' ? '正在同步' : '同步多邻国'}
+            <span>{operation === 'sync' ? '正在同步' : '同步多邻国'}</span>
           </button>
         </div>
       </header>
 
+      {voiceStatus && (!voiceStatus.supported || voiceStatus.voices.length === 0) && (
+        <div className="setup-banner">
+          <AlertCircle size={17} />
+          <span>尚未检测到法语语音，例句朗读暂不可用。</span>
+          <button onClick={() => setSettingsOpen(true)}>检查语音设置</button>
+        </div>
+      )}
       {error && <div className="error-banner">{error}</div>}
+      {settingsOpen && <SettingsPanel voiceStatus={voiceStatus} onVoiceStatusChange={setVoiceStatus} onClose={() => setSettingsOpen(false)} />}
       {outlineOpen && (
         <>
           <button className="drawer-scrim" onClick={() => setOutlineOpen(false)} aria-label="关闭课程大纲" />

@@ -90,25 +90,6 @@ class VocabularyTask(SQLModel, table=True):
     finished_at: datetime | None = None
 
 
-class Lesson(SQLModel, table=True):
-    id: int | None = Field(default=None, primary_key=True)
-    lesson_date: str = Field(index=True, unique=True)
-    kind: str
-    created_at: datetime
-    study_completed_at: datetime | None = None
-    review_completed_at: datetime | None = None
-    content_json: str | None = None
-
-
-class LessonWord(SQLModel, table=True):
-    __table_args__ = (UniqueConstraint("lesson_id", "word_id"),)
-
-    id: int | None = Field(default=None, primary_key=True)
-    lesson_id: int = Field(foreign_key="lesson.id", index=True)
-    word_id: int = Field(foreign_key="word.id", index=True)
-    position: int
-
-
 class CourseSkill(SQLModel, table=True):
     __table_args__ = (UniqueConstraint("duolingo_skill_id"),)
 

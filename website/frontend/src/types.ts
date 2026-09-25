@@ -36,6 +36,35 @@ export type TutorMessage = {
   content: string
 }
 
+export type ConfigurationStatus = {
+  duolingo: {
+    configured: boolean
+    jwtConfigured: boolean
+    userIdConfigured: boolean
+    userIdHint?: string
+    courseId?: string
+    fromLanguage?: string
+  }
+  ai: {
+    configured: boolean
+    apiKeyConfigured: boolean
+    endpoint?: string
+    model?: string
+    reasoningEffort: string
+  }
+}
+
+export type ConnectionTestResult = {
+  success: boolean
+  latencyMs: number
+  model?: string
+  message?: string
+  courseId?: string
+  learningLanguage?: string
+  fromLanguage?: string
+  skillCount?: number
+}
+
 export type LessonContent = {
   title: string
   overview: string

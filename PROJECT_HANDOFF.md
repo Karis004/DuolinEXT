@@ -1,210 +1,205 @@
-# DuolinEx 最新开发交接文档
+# DuolinEXT 工程交接
 
-> 这是一份给后续 AI 或开发者读取的工程交接，不是面向普通用户的产品说明。开始改代码前应先阅读本文件和根目录 `README.md`。
+> 本文面向后续开发者与 AI。开始修改代码前应同时阅读根目录 `README.md`。最后更新：2026-09-20。
 
-## 1. 项目定位
+## 1. 产品边界
 
-DuolinEx 是一个单用户、本地优先的法语辅助学习 Web 应用。用户继续使用多邻国中文法语课程学习，DuolinEx 在用户主动同步后读取多邻国的课程进度和已学词汇，并在本地按照多邻国的 `Skill -> Session` 结构组织课程，再通过 AI 生成更完整的语法、词汇和发音补充内容。
+DuolinEXT 是单用户、本地优先的法语辅助学习应用。用户继续在多邻国学习；DuolinEXT 只在用户主动同步时读取多邻国进度和已学词汇，然后在本地按 `Skill -> Session` 组织内容，并通过 AI 补充语法、词汇和发音课程。
 
-产品目标不是替代多邻国，也不是做一个完整法语词典，而是解决“背过单词但不知道为什么这样造句、词形为什么变化、发音规则是什么”的问题。
+产品重点：
 
-用户的核心学习偏好：
+- 词汇与语法同步学习，而不是只做单词卡。
+- 语法应从句子结构、人称变位、性数一致、否定和疑问等基础逐步推进。
+- 发音使用 IPA、节奏、连读和省音等真实规则，不使用中文谐音教学。
+- 课程详细但易读，避免密集长文和无目的重复。
+- AI 辅导只解决当前小问题，不重新生成整节课。
+- 词汇表只展示初学阶段需要识别的核心词形，不做完整词典。
 
-- 词汇和语法同步学习。
-- 语法从主谓宾、句子结构、人称变位、性数一致、否定和疑问逐步推进，不能只写空泛总结。
-- 发音讲 IPA、重音/节奏、连读、省音等真实规则，不要用中文谐音或幼儿式口型教学。
-- 课程正文应该详细但易读，避免大段密集文字和不必要的重复复习。
-- AI 即时辅导要轻、快、上下文少；词汇表只展示初学者当前最需要识别的核心词形。
+当前不支持多用户、账号体系、云端同步或公开部署。
 
-## 2. 工作区和发布范围
+## 2. 代码范围
 
-本地工作区：`C:\Users\28623\Documents\ForFun\DuolinEx`
+- `website/`：唯一正式应用目录。
+- `website/backend/app/`：后端实现。
+- `website/backend/tests/`：当前有效的后端回归测试。
+- `website/frontend/src/`：前端实现。
+- 根目录插件文件与探测脚本：早期研究材料，不属于网站运行链路，不要在网站重构中顺带修改。
+- 根目录只维护两份正式文档：`README.md` 与 `PROJECT_HANDOFF.md`。
 
-当前 GitHub 目标仓库：`https://github.com/Karis004/DuolinEXT.git`
+本地私密或生成内容：
 
-目录职责：
+- `website/.env`
+- `website/backend/data/duolinext.db`
+- `node_modules/`、`dist/`、`__pycache__/`、`.pytest_cache/`、`*.tsbuildinfo`
 
-- `website/` 是当前主项目。
-- 根目录 `fetch_duolingo_words.py`、`probe_single_skill_words.py`、`server_get_probe.py` 等是前期接口研究和单 Skill payload 测试脚本，网站运行不依赖它们。
-- `content.js` 和 `manifest.json` 是早期浏览器插件实验，保留作历史参考。
-- `website/backend/data/duolinex.db` 是本地个人数据库，已在根 `.gitignore` 中排除。
-- `website/.env` 和 `website/frontend/.env.local` 是本地私密配置，已排除。
+这些路径均不得提交。
 
-注意：原工作区曾经向上继承到 `C:\Users\28623\.git`，而该 Git 目录存在 ownership/safe-directory 问题。发布时应以 `DuolinEx` 作为独立仓库根目录，不能直接在用户目录的 Git 仓库中提交整个用户目录。
-
-## 3. 当前技术栈
+## 3. 技术结构
 
 ### 后端
 
-- Python 3.11。
-- FastAPI + Uvicorn。
-- SQLModel/SQLAlchemy。
-- SQLite。
-- `httpx` 请求 OpenAI-compatible AI 服务。
-- 多邻国请求通过系统 `curl`，不是 Python `urllib`。
+- Python 3.11+、FastAPI、Uvicorn。
+- SQLModel/SQLAlchemy 与 SQLite。
+- `httpx` 请求 OpenAI-compatible API。
+- 系统 `curl` 请求多邻国接口。
+- FastAPI `BackgroundTasks` 执行课程和词形批处理。
+
+主要模块：
+
+| 文件 | 职责 |
+| --- | --- |
+| `main.py` | API、生命周期、CORS、后台任务编排 |
+| `models.py` | 当前数据库模型 |
+| `database.py` | 引擎、建表与 SQLite 兼容迁移 |
+| `duolingo.py` | 多邻国请求、课程路径和 learned-lexemes 解析 |
+| `sync_service.py` | Skill/Session/Word 差分同步 |
+| `session_service.py` | 课程路径、Session 详情、完成状态 |
+| `generation_service.py` | 课程与累计大纲生成、版本和批量任务 |
+| `vocabulary_service.py` | Lexeme、核心词形和词汇任务 |
+| `ai.py` | prompt、AI 请求、JSON 解析与输出校验 |
 
 ### 前端
 
-- React 19。
-- TypeScript。
-- Vite。
-- `lucide-react` 图标。
-- 浏览器 `SpeechSynthesis` 本地 TTS。
+- React 19、TypeScript、Vite、`lucide-react`。
+- `App.tsx` 当前包含主布局、课程路径、课程内容、大纲、词汇表和 AI 辅导。
+- `types.ts` 定义前后端响应结构。
+- `audio/frenchAudio.ts` 统一处理多邻国音频和浏览器法语 TTS。
+- `styles.css` 包含桌面与移动端布局。
 
-### 运行端口
+`App.tsx` 体积较大。小改动应沿用现有结构；涉及多个独立视图的大功能可以按课程、词汇表、辅导和大纲边界拆分组件，但不要为了单一改动先做无关重构。
 
-- 前端开发服务：`127.0.0.1:5173`。
-- 后端 API：`127.0.0.1:8000`。
-- Vite 可通过 `VITE_API_BASE_URL` 覆盖 API 地址，默认 `http://127.0.0.1:8000`。
+## 4. 数据模型
 
-不要同时启动多个共享同一 SQLite 文件的 `uvicorn --reload` 实例。`lifespan` 启动时会执行数据库迁移，并会将未完成的后台生成任务标为取消；多个实例会互相取消任务，造成前端任务进度不断从 `0 / n` 重新开始。
+当前业务表：
 
-## 4. 当前功能状态
+- `Word`：表面词形、翻译、音频 URL 和学习计数。
+- `CourseSkill`：课程路径中的 canonical Skill。
+- `SkillSession`：Skill 内的 canonical Session。
+- `SessionWord`：Session 与新增词汇关联。
+- `SessionLesson`：课程正文、大纲、生成版本和学习状态。
+- `SyncRun`：多邻国同步记录。
+- `GenerationTask`：课程批量生成任务。
+- `Lexeme`：词汇原型、词性、意义和生成状态。
+- `LexemeForm`：原型的核心词形。
+- `WordLexeme`：表面词形与原型关联。
+- `VocabularyTask`：词形整理任务。
 
-### 4.1 多邻国同步
+旧的按日期 `Lesson`/`LessonWord` 体系已退出运行链路，源码模型和服务已删除。为了保护已有数据库，迁移代码不会主动删除真实数据库中的旧表。
 
-用户点击“同步多邻国”才触发同步。页面刷新、打开课程、生成讲解和打开词汇表不应触发多邻国请求。
+数据库变更规则：
 
-`duolingo.py` 的流程：
+1. 不删除或重建用户数据库。
+2. 新表由 `SQLModel.metadata.create_all` 创建。
+3. 新字段和数据修复写入 `database.py`，迁移必须可重复执行。
+4. 涉及数据库的改动至少在临时 SQLite 上测试，并谨慎验证真实数据库。
 
-1. 请求 `2023-05-23/users/{user_id}?fields=currentCourse,currentCourseId,learningLanguage,fromLanguage`。
-2. 从 `currentCourse.pathSectioned[].units[].levels[]` 提取 `type=skill`、`subtype=regular`、`state=passed|active` 的 Skill。
-3. 以 `pathLevelMetadata.skillId` 分组，选择 `levelIndex=0` 的 canonical Skill；重复 crown level 不是应用课程的第三层。
-4. 将 `finishedSessions` 转成 Session 进度。
-5. 以单 Skill payload 请求 learned-lexemes：
+品牌改名后默认数据库名称为 `duolinext.db`。`database.py` 只在使用默认路径、新文件不存在且旧文件存在时，将旧数据库原位改名；不得删除这项兼容逻辑，除非已明确结束旧版迁移支持。
 
-   ```json
-   {
-     "lastTotalLexemeCount": 0,
-     "progressedSkills": [
-       {
-         "finishedLevels": 0,
-         "finishedSessions": 3,
-         "skillId": {"id": "..."}
-       }
-     ]
-   }
-   ```
+## 5. 多邻国同步
 
-6. 按分页抓取单词。
+同步只能由 `POST /api/sync/duolingo` 触发。页面加载、轮询、打开课程、查看词汇表和生成课程不得隐式请求多邻国。
 
-`sync_service.py` 只处理尚未 `synced_at` 的已完成 Session，并根据先前路径中的单词做差分。重复词不会重复插入 `Word` 或当前 Session 的 `SessionWord`。
+同步流程：
 
-### 4.2 数据库模型
+1. 获取用户当前课程及 `pathSectioned`。
+2. 提取 `type=skill`、`subtype=regular`、`state=passed|active` 的路径节点。
+3. 按 `pathLevelMetadata.skillId` 分组，仅保留 `levelIndex=0` 的 canonical Skill。
+4. 将 `finishedSessions` 转为 Session 进度。
+5. 对尚未同步的已完成 Session，以单 Skill `progressedSkills` payload 请求 learned-lexemes。
+6. 按此前路径词汇做差分并写入 `Word` 与 `SessionWord`。
+7. 空 Session 标记为已完成。
 
-核心表：
+重复 crown level 不是第三层课程结构，不要重新引入。
 
-- `Word`：表面词形、中文翻译、多邻国音频 URL、学习计数。
-- `CourseSkill`：Skill 层。
-- `SkillSession`：Skill 内 Session 层，应用只使用 `level_index=0` 的 canonical Session。
-- `SessionWord`：Session 和 Word 的关联。
-- `SessionLesson`：Session 课程正文、大纲、版本和生成状态。
-- `SyncRun`：同步记录。
-- `GenerationTask`：课程/大纲批量生成任务。
+## 6. 课程与大纲
 
-词汇表新增表：
+`SessionLesson` 的正文与累计大纲是原子绑定关系：
 
-- `Lexeme`：原型、词性、阴阳性、含义、生成状态和 prompt version。
-- `LexemeForm`：一个原型的核心词形。
-- `WordLexeme`：表面词形和词汇原型的关联。
-- `VocabularyTask`：批量词形整理任务。
+- 有正文必须有大纲，有大纲也必须有正文。
+- 一个流程内先生成正文，再生成大纲。
+- 大纲失败时不能留下只有正文的半成品。
+- 较早 Session 的大纲上下文必须按该 Session 的路径位置截断，后续课程不能倒灌。
 
-不得删除或重建生产数据库。数据库迁移集中在 `website/backend/app/database.py`，使用 SQLite 的 `ALTER TABLE` 和数据修复语句。新表通过 `SQLModel.metadata.create_all` 创建。
+当前版本常量位于 `ai.py`：
 
-### 4.3 课程正文和大纲
+- `LESSON_PROMPT_VERSION = 3`
+- `OUTLINE_PROMPT_VERSION = 2`
+- `VOCABULARY_PROMPT_VERSION = 1`
 
-`SessionLesson` 中正文和大纲是绑定关系：
+修改 prompt、JSON 协议或影响既有结果语义时，必须提升对应版本号并检查批量升级逻辑。旧课程数据应保留，除非用户明确执行升级。
 
-- 有正文必须有大纲。
-- 有大纲必须有正文。
-- 一个生成流程内先生成课程正文，再生成累计大纲；大纲失败时不能留下只有正文的半成品。
-- `generation_status` 可能是 `pending`、`queued`、`generating`、`outlining`、`ready`、`error`、`outline_error`。
-- 当前版本常量位于 `ai.py`：`LESSON_PROMPT_VERSION=3`、`OUTLINE_PROMPT_VERSION=2`、`VOCABULARY_PROMPT_VERSION=1`。修改 prompt 或输出协议时要增加对应版本号，并同步检查升级逻辑。
+课程生成状态包括 `pending`、`queued`、`generating`、`outlining`、`ready`、`error` 和 `outline_error`。批量任务必须有明确的 queued/running/completed/partial/cancelled/error 结果。
 
-大纲不是“生成时间之后的全局状态快照”。生成某个较早 Session 时，大纲上下文应按照该 Session 的课程路径截断；后生成的后续课程不能倒灌到前面课程的历史视角。
+## 7. AI 即时辅导
 
-### 4.4 AI 即时辅导
+前端在课程正文中读取 Selection，并通过右侧抽屉调用 `POST /api/tutor/ask`。切换 Session、完成课程、关闭抽屉或刷新页面会清空临时对话。
 
-前端实现集中在 `website/frontend/src/App.tsx`：
+请求只应包含：
 
-- 固定右下角 `AI 辅导`按钮。
-- 正文 `onMouseUp` 读取浏览器 Selection。
-- `.selection-actions` 提供“问 AI”和“解释这段”。
-- `.tutor-drawer` 固定在右侧，移动端全屏。
-- `selectionchange`、`pointerdown`、滚动和 resize 会关闭已失效的选区浮框。
-- 切换 Session、完成 Session、关闭抽屉、刷新页面会清空 `tutorMessages` 和 `tutorText`。
+- 当前 Skill 与 Session。
+- 当前累计大纲。
+- 用户选中的文本。
+- 当前问题。
+- 最近 6 条消息。
 
-后端 `/api/tutor/ask` 调用 `ask_tutor`：
+不要加入完整课程正文、全部词汇或完整历史。辅导默认中文优先、短回答，输出上限为 320 tokens，超时最多 35 秒。
 
-- system prompt 要求中文优先、短回答、准确直接、通常不超过 120 字。
-- user payload 只包含当前课程位置、当前累计大纲、选中文本、问题和最近 6 条消息。
-- 最大输出 `max_tokens=320`。
-- 辅导 timeout 最多 35 秒。
+## 8. 词汇表与 TTS
 
-不要把完整课程正文、全部词汇、全部历史消息重新塞回即时辅导请求。这个功能的产品目标是快速解决一个小问题，不是重新生成课程。
+词汇入口为 `GET /api/vocabulary`。当前批次每次处理 4 个词，异常时必须 rollback 后再标记错误，避免事务进入 `PendingRollbackError`。
 
-### 4.5 词汇表和词形任务
+- 已是当前 prompt version 且 `ready` 的 Lexeme 不重复生成。
+- 写入新 profile 时先删除旧 `LexemeForm` 并 `flush()`，再插入新词形。
+- 超过 3 分钟无进度的 running 任务会标记为 cancelled。
+- 打开词汇表且存在待处理词时，可自动创建词形任务。
 
-词汇表位于前端顶部导航，数据入口是 `/api/vocabulary`。点击词形使用 `playFrench(form.form)`，不传多邻国音频 URL，因此走本地法语 TTS。
+`playFrench(text, audioUrl?)` 有多邻国音频时优先播放，失败后回退浏览器语音。词汇表故意不传音频 URL。语音不再通过 `frontend/.env.local` 配置：前端自动检测 `SpeechSynthesis` 法语语音，自动模式优先 `localService=false` 的浏览器在线语音，再回退 `localService=true` 的设备语音。用户选择保存在 `duolinext.frenchVoicePreference`。
 
-`vocabulary_service.py`：
+设置页使用以下只读/检测接口：
 
-- 先检查 `Lexeme` 是否已经是当前 prompt version 的 `ready`。
-- 一个批次目前 4 个词，减少单次 AI JSON 过大和超时概率。
-- 词形生成 timeout 最多 30 秒。
-- `_store_profile` 删除同一 Lexeme 的旧 `LexemeForm`，先 `session.flush()`，再插入新词形，避免 SQLite 唯一键冲突。
-- 批次异常必须 `session.rollback()`，再将该批词标记为 error 并提交；不能让事务留在 `PendingRollbackError` 状态。
-- `active_vocabulary_task` 会将超过 3 分钟没有完成进度的 running 任务标记为 cancelled。
-- `/api/vocabulary` 在没有活动任务但仍有待处理词且 AI 已配置时，会自动创建并后台启动新的词形任务。
+- `GET /api/settings/status`：只返回配置完整度、脱敏用户 ID、无凭据的 AI endpoint 和模型信息。
+- `POST /api/settings/test-duolingo`：读取当前课程概要，不写数据库。
+- `POST /api/settings/test-ai`：发送最多 16 tokens 的短连接测试，只有用户点击时调用。
+- `POST /api/settings/reload`：清除后端配置缓存并重新读取 `.env`，返回脱敏后的配置状态；不返回 JWT/API key。数据库引擎等启动资源不在运行时切换范围内。
 
-之前真实数据库出现过 `LexemeForm` 唯一键冲突，表现为 `0 / 54` 长时间不动；现已修复。若再次看到任务长期 0 进度，先查看后端终端 traceback 和 `/api/vocabulary` 的 task id，不要直接删除数据库。
+浏览器无法替用户安装系统语音包。若未检测到法语语音，前端应显示对应操作系统的安装路径，并在 `voiceschanged` 后自动刷新状态。
 
-## 5. TTS 约定
+## 9. 前端状态与轮询
 
-文件：`website/frontend/src/audio/frenchAudio.ts`。
+关键状态：
 
-- 默认 `local`：选择 `fr-FR` 或其他法语 `localService=true` 语音。
-- `browser`：允许使用浏览器提供的非本地/远程语音。
-- `playFrench(text, audioUrl?)`：有 `audioUrl` 时先尝试多邻国音频，失败后回退浏览器语音；词汇表故意不传 `audioUrl`。
-- 播放前取消上一个播放，处理 `voiceschanged`，避免浏览器语音列表尚未初始化。
-- 不要把 `rate` 作为产品层面的“快慢修复”加入；之前的异常快读来自浏览器倍速插件，不是应用逻辑。
+- `data` 与 `data.selectedSession`：Dashboard 和当前 Session。
+- `operation`：同步、加载、生成、升级、重试、取消、完成等互斥操作。
+- `tutorOpen`、`tutorText`、`tutorRect`、`tutorMessages`：Session 内临时辅导。
+- `vocabularyOpen`、`vocabulary`：词汇表及任务进度。
+- `pathOpen`、`outlineOpen`：移动端/抽屉 UI。
 
-## 6. 关键前端状态
+课程存在运行中任务或待生成内容时，Dashboard 每 3 秒刷新；词汇表打开时每 3 秒刷新 `/api/vocabulary`。轮询只能访问本地 API。
 
-`App.tsx` 中：
+Session 选择保存在 `duolinext.selectedSessionId`。前端会读取并清理旧的 `duolinex.selectedSessionId`，保证名称升级后保留用户位置。
 
-- `data`：DashboardData。
-- `data.selectedSession`：当前 Session 详情。
-- `operation`：同步、加载、生成、升级、重试、取消、完成等 UI 操作。
-- `tutorOpen`、`tutorText`、`tutorRect`、`tutorMessages`：当前 Session 临时辅导状态。
-- `vocabularyOpen`、`vocabulary`：词汇表 overlay 和轮询数据。
+## 10. API 概览
 
-轮询：课程生成任务存在或有待生成课程时，Dashboard 每 3 秒刷新；词汇表打开时，`/api/vocabulary` 每 3 秒刷新。轮询不能触发同步多邻国。
+- `GET /api/health`
+- `GET /api/settings/status`
+- `POST /api/settings/test-duolingo`
+- `POST /api/settings/test-ai`
+- `GET /api/dashboard`
+- `POST /api/sync/duolingo`
+- `GET /api/sessions/{id}`
+- `POST /api/sessions/{id}/generate`
+- `POST /api/sessions/{id}/complete`
+- `POST /api/lessons/upgrade`
+- `POST /api/lessons/generate-missing`
+- `POST /api/lessons/retry-failed`
+- `POST /api/lessons/generation/cancel`
+- `POST /api/tutor/ask`
+- `GET /api/vocabulary`
+- `GET /api/words`
 
-## 7. 环境配置
+课程生成、词汇整理和同步之间存在互斥检查。新增写操作前先确认不会与现有后台任务并发破坏 SQLite 状态。
 
-模板：`website/.env.example`。
-
-```env
-DUOLINGO_JWT=
-DUOLINGO_USER_ID=1148050773
-DUOLINGO_COURSE_ID=fr
-DUOLINGO_FROM_LANGUAGE=zh
-DUOLINGO_PAGE_SIZE=50
-DAILY_WORD_LIMIT=6
-APP_TIMEZONE=Asia/Shanghai
-AI_API_KEY=
-AI_BASE_URL=https://api.example.com/v1
-AI_MODEL=
-AI_TIMEOUT_SECONDS=150
-AI_MAX_ATTEMPTS=3
-AI_RETRY_BASE_SECONDS=2
-AI_REASONING_EFFORT=low
-```
-
-不要把真实 JWT、API key、完整 `.env` 或请求日志提交到仓库。
-
-## 8. 本地启动和验证
+## 11. 本地运行与验证
 
 在 `website/`：
 
@@ -213,7 +208,7 @@ npm.cmd run setup
 npm.cmd run dev
 ```
 
-独立验证：
+验证命令：
 
 ```powershell
 cd website/backend
@@ -224,37 +219,20 @@ cd ..
 npm --prefix frontend run build
 ```
 
-当前最新验证：后端 37 个测试通过，前端 TypeScript/Vite 构建通过。
+端口：前端 `127.0.0.1:5173`，后端 `127.0.0.1:8000`。不要同时启动多个共享同一数据库的 `uvicorn --reload` 实例。
 
-## 9. 本地数据库迁移原则
+## 12. 安全与发布
 
-仓库不提交 `website/backend/data/duolinex.db`。迁移用户已有数据：
+- 不读取、输出或提交真实 JWT、AI key、完整 `.env` 或个人数据库。
+- 当前 CORS 只允许本地 Vite 地址。
+- 当前没有认证、用户隔离和限流，不得直接公开部署。
+- 支持多人之前必须先给所有业务模型增加 user/account 维度。
+- 公开部署需要认证、HTTPS、反向代理、限流、密钥管理和更严格的 CORS。
 
-1. 停止应用，避免复制时 SQLite 仍在写入。
-2. 备份旧 `duolinex.db`。
-3. 新环境安装依赖，复制 `.env.example` 为 `.env` 并重新填写密钥。
-4. 将旧 `duolinex.db` 复制到 `website/backend/data/duolinex.db`。
-5. 启动后端一次，应用自动补充 schema。
-6. 检查 `/api/health`、`/api/dashboard`、`/api/vocabulary`。
-7. 确认数据无误后启动前端。
+## 13. 后续优先级
 
-不要把数据库中的个人数据导出到 README、测试 fixture 或 GitHub issue。不要为了修复单个词形任务删除整库；优先查看任务状态、回滚事务和重跑剩余任务。
-
-## 10. 后续开发优先级
-
-1. 为 `ask_tutor` 增加独立后端单元测试，覆盖选中文本、空大纲、最近消息截断和 AI 错误。
-2. 为词汇任务增加任务取消/重试策略测试，覆盖 AI 返回缺词、JSON 无效、数据库写入失败和应用重启。
-3. 补充生产部署的进程管理、反向代理、HTTPS、认证和 CORS 配置。
-4. 修改课程 prompt 时增加版本号并保留旧课程数据，除非用户明确执行升级。
-5. 词汇表目前只生成核心初学形态，不要未经用户确认扩展成完整法语词典级变位表。
-6. 若未来支持多人，必须首先重构数据模型加入 user/account 维度，不能在现有单用户表上直接开放公网。
-
-## 11. 代码修改约定
-
-- 优先沿用当前 FastAPI、SQLModel、React、TypeScript 模式。
-- 不删除用户未要求删除的旧数据或旧表。
-- 数据库新增字段必须提供兼容迁移，并考虑已有 SQLite 文件。
-- 后台任务需要有明确的 queued/running/completed/partial/cancelled/error 状态，异常必须 rollback。
-- 不要在每次页面刷新时触发多邻国同步或 AI 生成。
-- 不要把密钥写入源码、测试输出、commit message 或文档示例。
-- 修改后至少运行相关后端测试和前端 build；涉及数据库时应在临时 SQLite 和真实数据库上各验证一次。
+1. 为 `ask_tutor` 增加独立单元测试，覆盖选中文本、空大纲、消息截断和 AI 错误。
+2. 完善词汇任务取消与重试测试，覆盖缺词、无效 JSON、数据库失败和应用重启。
+3. 按实际部署目标补充进程管理、反向代理、认证与 HTTPS。
+4. 大型前端升级时逐步拆分 `App.tsx`，保持 API 和用户数据兼容。
+5. 未经用户确认，不把词汇表扩展为完整法语词典级变位表。

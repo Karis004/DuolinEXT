@@ -1,7 +1,31 @@
 from sqlalchemy import inspect
 from sqlmodel import create_engine
 
-from app.database import apply_schema_migrations
+from app.database import apply_schema_migrations, migrate_legacy_database_file
+
+
+def test_moves_legacy_default_database_without_overwriting(tmp_path):
+    legacy_path = tmp_path / "duolinex.db"
+    target_path = tmp_path / "duolinext.db"
+    legacy_path.write_bytes(b"existing database")
+
+    moved = migrate_legacy_database_file(
+        f"sqlite:///{target_path.as_posix()}",
+        legacy_path,
+        target_path,
+    )
+
+    assert moved is True
+    assert not legacy_path.exists()
+    assert target_path.read_bytes() == b"existing database"
+    legacy_path.write_bytes(b"legacy database")
+    assert migrate_legacy_database_file(
+        f"sqlite:///{target_path.as_posix()}",
+        legacy_path,
+        target_path,
+    ) is False
+    assert legacy_path.read_bytes() == b"legacy database"
+    assert target_path.read_bytes() == b"existing database"
 
 
 def test_adds_missing_skill_session_completion_column_idempotently():

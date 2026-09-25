@@ -340,7 +340,7 @@ def test_normal_sync_mode_adds_outline_without_replacing_old_content(
     assert saved.outline_version == OUTLINE_PROMPT_VERSION
 
 
-def test_transient_ai_failures_are_retried(engine):
+def test_transient_ai_failures_are_retried(engine, monkeypatch):
     attempts = 0
 
     def flaky_lesson(*_args, **_kwargs):
@@ -350,12 +350,8 @@ def test_transient_ai_failures_are_retried(engine):
             raise AITransientError("temporary timeout")
         return lesson_content("recovered")
 
-    settings = Settings(
-        database_url="sqlite://",
-        ai_max_attempts=3,
-        ai_retry_base_seconds=0,
-        _env_file=None,
-    )
+    monkeypatch.setattr("app.generation_service.time.sleep", lambda _seconds: None)
+    settings = Settings(database_url="sqlite://", _env_file=None)
     with Session(engine) as session:
         first, _ = setup_course(session)
         saved = generate_and_store_session_lesson(
@@ -370,7 +366,7 @@ def test_transient_ai_failures_are_retried(engine):
     assert saved.generation_status == "ready"
 
 
-def test_validation_failures_receive_one_repair_attempt(engine):
+def test_validation_failures_receive_one_repair_attempt(engine, monkeypatch):
     attempts = 0
 
     def invalid_lesson(*_args, **_kwargs):
@@ -378,12 +374,8 @@ def test_validation_failures_receive_one_repair_attempt(engine):
         attempts += 1
         raise AIValidationError("missing fields")
 
-    settings = Settings(
-        database_url="sqlite://",
-        ai_max_attempts=3,
-        ai_retry_base_seconds=0,
-        _env_file=None,
-    )
+    monkeypatch.setattr("app.generation_service.time.sleep", lambda _seconds: None)
+    settings = Settings(database_url="sqlite://", _env_file=None)
     with Session(engine) as session:
         first, _ = setup_course(session)
         with pytest.raises(AIValidationError, match="已尝试 2 次"):
