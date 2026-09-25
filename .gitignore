@@ -1,9 +1,11 @@
 # Secrets and local configuration
 website/.env
+/.env
 website/frontend/.env.local
 
 # Local learning database and generated runtime data
 website/backend/data/*
+deploy/htpasswd
 *.db
 *.sqlite
 *.sqlite3

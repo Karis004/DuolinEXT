@@ -148,6 +148,41 @@ npm --prefix frontend run build
 
 前端可以由 Nginx、Caddy 或其他静态文件服务器托管，并将 `/api` 反向代理到 FastAPI。当前应用是单用户本地工具，没有登录、用户隔离和权限系统；部署到公网前必须补充认证、HTTPS、限流和严格的 CORS 配置。
 
+### Docker 与 GitHub Actions 自动部署
+
+仓库根目录的 `compose.yaml` 使用两个容器：Nginx 托管前端并转发 `/api`，FastAPI 仅在 Docker 内部网络监听。主机只使用 `8085` 端口。默认绑定 `127.0.0.1:8085`，适合由服务器已有的 HTTPS 反向代理接入；Nginx 还会对整个网站执行 HTTP Basic Auth。**不要将没有 HTTPS 保护的 `8085` 直接开放到公网**，否则登录口令会在传输中暴露。
+
+首次在 Linux 服务器安装 Docker Engine、Compose 插件、Git 和 OpenSSL 后，以有 Docker 权限的部署用户执行：
+
+```bash
+git clone https://github.com/Karis004/DuolinEXT.git /opt/duolinext
+cd /opt/duolinext
+cp website/.env.example website/.env
+# 编辑 website/.env，填入多邻国和 AI 配置；不要提交这个文件
+mkdir -p deploy website/backend/data
+printf 'duolinext:' > deploy/htpasswd
+openssl passwd -apr1 >> deploy/htpasswd  # 交互输入网站访问口令
+chmod 600 website/.env
+chmod 644 deploy/htpasswd
+docker compose up --build --wait --wait-timeout 180
+```
+
+访问 `http://127.0.0.1:8085/healthz` 可检查前端容器；通过服务器的 HTTPS 反向代理访问网站，并将代理目标设为 `127.0.0.1:8085`。如果需要改主机绑定地址或端口，可在服务器仓库根目录创建不提交的 `.env`，设置 `DUOLINEXT_BIND_IP` 和 `DUOLINEXT_PORT`。学习数据库保存在服务器的 `website/backend/data/`，重新构建容器不会删除它。
+
+`.github/workflows/deploy.yml` 在每次推送 `main` 后先执行后端测试、前端构建和两个 Docker 镜像构建。完成以下 GitHub 仓库设置后，它会通过 SSH 登录服务器、执行 `git pull --ff-only origin main`，然后重新构建并启动容器：
+
+| 类型 | 名称 | 内容 |
+| --- | --- | --- |
+| Repository variable | `DEPLOY_ENABLED` | `true`；完成服务器准备后再设置 |
+| Repository variable | `DEPLOY_PATH` | 服务器仓库的绝对路径，例如 `/opt/duolinext` |
+| Repository variable | `DEPLOY_PORT` | SSH 端口；不设置时使用 `22` |
+| Repository secret | `DEPLOY_HOST` | 服务器 SSH 地址 |
+| Repository secret | `DEPLOY_USER` | 有 Docker 权限的 SSH 用户 |
+| Repository secret | `DEPLOY_SSH_KEY` | 专用 Ed25519 私钥全文；对应公钥放入服务器该用户的 `~/.ssh/authorized_keys` |
+| Repository secret | `DEPLOY_KNOWN_HOSTS` | 已核对指纹的服务器 SSH host key 对应的 `known_hosts` 行 |
+
+在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中设置上述值。生成部署专用 SSH 密钥后，先在可信渠道核对服务器 host key 指纹，再保存 `known_hosts` 行；不要把私钥、网站口令或 `website/.env` 提交到仓库。未设置 `DEPLOY_ENABLED=true` 时，工作流只验证代码，不会尝试连接服务器。首次配置完成后可在 **Actions → Verify and deploy → Run workflow** 手动触发一次。
+
 ## 安全提醒
 
 - `DUOLINGO_JWT` 是登录凭证，只能存放在本地 `.env` 或密钥管理系统。

@@ -1,0 +1,92 @@
+name: Verify and deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: duolinext-production
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: website/backend/requirements.txt
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: website/frontend/package-lock.json
+      - name: Install dependencies
+        run: |
+          python -m pip install -r website/backend/requirements.txt
+          npm ci --prefix website/frontend
+      - name: Backend tests
+        working-directory: website/backend
+        run: python -m pytest
+      - name: Frontend build
+        run: npm --prefix website/frontend run build
+      - name: Backend image build
+        run: docker build -f website/backend/Dockerfile website
+      - name: Frontend image build
+        run: docker build -f website/frontend/Dockerfile website
+
+  deploy:
+    needs: verify
+    if: vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
+    steps:
+      - name: Validate deployment settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_USER"
+          test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          [[ "$DEPLOY_PATH" == /* ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]]
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+      - name: Pull and restart on server
+        shell: bash
+        run: |
+          set -euo pipefail
+          deploy_path_b64="$(printf '%s' "$DEPLOY_PATH" | base64 -w0)"
+          ssh -i ~/.ssh/id_ed25519 -p "$DEPLOY_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" "DEPLOY_PATH_B64=$deploy_path_b64 bash -se" <<'REMOTE'
+          set -euo pipefail
+          deploy_path="$(printf '%s' "$DEPLOY_PATH_B64" | base64 -d)"
+          cd "$deploy_path"
+          test -f website/.env
+          test -f deploy/htpasswd
+          git pull --ff-only origin main
+          docker compose config --quiet
+          docker compose up --build --force-recreate --wait --wait-timeout 180 --remove-orphans
+          docker compose ps
+          REMOTE

@@ -1,0 +1,36 @@
+services:
+  api:
+    build:
+      context: ./website
+      dockerfile: backend/Dockerfile
+    env_file:
+      - ./website/.env
+    volumes:
+      - ./website/backend/data:/app/website/backend/data
+    restart: unless-stopped
+    init: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  web:
+    build:
+      context: ./website
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "${DUOLINEXT_BIND_IP:-127.0.0.1}:${DUOLINEXT_PORT:-8085}:80"
+    volumes:
+      - ./deploy/htpasswd:/etc/nginx/htpasswd:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
