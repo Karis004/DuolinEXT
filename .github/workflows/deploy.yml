@@ -48,41 +48,25 @@ jobs:
     environment: production
     timeout-minutes: 20
     env:
-      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
-      DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
     steps:
-      - name: Validate deployment settings
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$DEPLOY_HOST"
-          test -n "$DEPLOY_USER"
-          test -n "$DEPLOY_SSH_KEY"
-          test -n "$DEPLOY_KNOWN_HOSTS"
-          [[ "$DEPLOY_PATH" == /* ]]
-          [[ "$DEPLOY_PORT" =~ ^[0-9]+$ ]]
+      - uses: actions/checkout@v7
       - name: Configure SSH
         shell: bash
         run: |
           set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          cp deploy/known_hosts ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key ~/.ssh/known_hosts
       - name: Pull and restart on server
         shell: bash
         run: |
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            ubuntu@40.233.65.88 'bash -se' <<'REMOTE'
           set -euo pipefail
-          deploy_path_b64="$(printf '%s' "$DEPLOY_PATH" | base64 -w0)"
-          ssh -i ~/.ssh/id_ed25519 -p "$DEPLOY_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST" "DEPLOY_PATH_B64=$deploy_path_b64 bash -se" <<'REMOTE'
-          set -euo pipefail
-          deploy_path="$(printf '%s' "$DEPLOY_PATH_B64" | base64 -d)"
-          cd "$deploy_path"
+          cd /home/ubuntu/DuolinEXT
           test -f website/.env
           test -f deploy/htpasswd
           git pull --ff-only origin main

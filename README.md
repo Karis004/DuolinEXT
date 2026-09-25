@@ -155,8 +155,8 @@ npm --prefix frontend run build
 首次在 Linux 服务器安装 Docker Engine、Compose 插件、Git 和 OpenSSL 后，以有 Docker 权限的部署用户执行：
 
 ```bash
-git clone https://github.com/Karis004/DuolinEXT.git /opt/duolinext
-cd /opt/duolinext
+git clone https://github.com/Karis004/DuolinEXT.git /home/ubuntu/DuolinEXT
+cd /home/ubuntu/DuolinEXT
 cp website/.env.example website/.env
 # 编辑 website/.env，填入多邻国和 AI 配置；不要提交这个文件
 mkdir -p deploy website/backend/data
@@ -170,19 +170,14 @@ docker compose up --build --wait --wait-timeout 180
 
 访问 `http://127.0.0.1:8085/healthz` 可检查前端容器；通过服务器的 HTTPS 反向代理访问网站，并将代理目标设为 `127.0.0.1:8085`。服务器仓库根目录不提交的 `.env` 记录运行容器的用户 ID，也可设置 `DUOLINEXT_BIND_IP` 和 `DUOLINEXT_PORT`。学习数据库保存在服务器的 `website/backend/data/`，重新构建容器不会删除它。
 
-`.github/workflows/deploy.yml` 在每次推送 `main` 后先执行后端测试、前端构建和两个 Docker 镜像构建。完成以下 GitHub 仓库设置后，它会通过 SSH 登录服务器、执行 `git pull --ff-only origin main`，然后重新构建并启动容器：
+`.github/workflows/deploy.yml` 在每次推送 `main` 后先执行后端测试、前端构建和两个 Docker 镜像构建。当前工作流固定部署到 `ubuntu@40.233.65.88:/home/ubuntu/DuolinEXT`；完成以下 GitHub 仓库设置后，它会通过 SSH 登录服务器、执行 `git pull --ff-only origin main`，然后重新构建并启动容器：
 
 | 类型 | 名称 | 内容 |
 | --- | --- | --- |
 | Repository variable | `DEPLOY_ENABLED` | `true`；完成服务器准备后再设置 |
-| Repository variable | `DEPLOY_PATH` | 服务器仓库的绝对路径，例如 `/opt/duolinext` |
-| Repository variable | `DEPLOY_PORT` | SSH 端口；不设置时使用 `22` |
-| Repository secret | `DEPLOY_HOST` | 服务器 SSH 地址 |
-| Repository secret | `DEPLOY_USER` | 有 Docker 权限的 SSH 用户 |
-| Repository secret | `DEPLOY_SSH_KEY` | 专用 Ed25519 私钥全文；对应公钥放入服务器该用户的 `~/.ssh/authorized_keys` |
-| Repository secret | `DEPLOY_KNOWN_HOSTS` | 已核对指纹的服务器 SSH host key 对应的 `known_hosts` 行 |
+| Repository secret | `SSH_PRIVATE_KEY` | 与服务器 `ubuntu` 用户已配置的 SSH 私钥全文；可沿用旧项目使用的本机密钥 |
 
-在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中设置上述值。生成部署专用 SSH 密钥后，先在可信渠道核对服务器 host key 指纹，再保存 `known_hosts` 行；不要把私钥、网站口令或 `website/.env` 提交到仓库。未设置 `DEPLOY_ENABLED=true` 时，工作流只验证代码，不会尝试连接服务器。首次配置完成后可在 **Actions → Verify and deploy → Run workflow** 手动触发一次。
+在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中设置上述值。服务器公开 host key 已经核对并固定在 `deploy/known_hosts`，SSH 连接会严格校验它。不要把私钥、网站口令或 `website/.env` 提交到仓库。未设置 `DEPLOY_ENABLED=true` 时，工作流只验证代码，不会尝试连接服务器。首次配置完成后可在 **Actions → Verify and deploy → Run workflow** 手动触发一次。
 
 ## 安全提醒
 
