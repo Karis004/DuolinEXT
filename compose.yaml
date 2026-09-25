@@ -3,6 +3,7 @@ services:
     build:
       context: ./website
       dockerfile: backend/Dockerfile
+    user: "${DUOLINEXT_UID:-1000}:${DUOLINEXT_GID:-1000}"
     env_file:
       - ./website/.env
     volumes:

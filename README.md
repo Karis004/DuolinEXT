@@ -160,6 +160,7 @@ cd /opt/duolinext
 cp website/.env.example website/.env
 # 编辑 website/.env，填入多邻国和 AI 配置；不要提交这个文件
 mkdir -p deploy website/backend/data
+printf 'DUOLINEXT_UID=%s\nDUOLINEXT_GID=%s\n' "$(id -u)" "$(id -g)" > .env
 printf 'duolinext:' > deploy/htpasswd
 openssl passwd -apr1 >> deploy/htpasswd  # 交互输入网站访问口令
 chmod 600 website/.env
@@ -167,7 +168,7 @@ chmod 644 deploy/htpasswd
 docker compose up --build --wait --wait-timeout 180
 ```
 
-访问 `http://127.0.0.1:8085/healthz` 可检查前端容器；通过服务器的 HTTPS 反向代理访问网站，并将代理目标设为 `127.0.0.1:8085`。如果需要改主机绑定地址或端口，可在服务器仓库根目录创建不提交的 `.env`，设置 `DUOLINEXT_BIND_IP` 和 `DUOLINEXT_PORT`。学习数据库保存在服务器的 `website/backend/data/`，重新构建容器不会删除它。
+访问 `http://127.0.0.1:8085/healthz` 可检查前端容器；通过服务器的 HTTPS 反向代理访问网站，并将代理目标设为 `127.0.0.1:8085`。服务器仓库根目录不提交的 `.env` 记录运行容器的用户 ID，也可设置 `DUOLINEXT_BIND_IP` 和 `DUOLINEXT_PORT`。学习数据库保存在服务器的 `website/backend/data/`，重新构建容器不会删除它。
 
 `.github/workflows/deploy.yml` 在每次推送 `main` 后先执行后端测试、前端构建和两个 Docker 镜像构建。完成以下 GitHub 仓库设置后，它会通过 SSH 登录服务器、执行 `git pull --ff-only origin main`，然后重新构建并启动容器：
 
