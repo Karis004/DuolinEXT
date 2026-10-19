@@ -15,6 +15,7 @@ from .ai import (
 )
 from .config import AI_TIMEOUT_SECONDS, Settings
 from .duolingo import DuolingoClient, DuolingoError
+from .logging_service import log_event
 
 
 def _safe_endpoint(value: str) -> str | None:
@@ -67,6 +68,52 @@ def settings_status(settings: Settings) -> dict:
 
 
 def test_ai_connection(settings: Settings) -> dict:
+    started = monotonic()
+    log_event(
+        "INFO",
+        "settings",
+        "AI 连接检测开始",
+        details={
+            "url": _chat_completions_url(settings.ai_base_url),
+            "model": settings.ai_model,
+            "reasoningEffort": settings.ai_reasoning_effort or None,
+            "timeoutSeconds": min(AI_TIMEOUT_SECONDS, 15),
+            "maxTokens": 16,
+        },
+    )
+    try:
+        result = _test_ai_connection(settings)
+    except Exception as exc:
+        elapsed_ms = round((monotonic() - started) * 1000)
+        log_event(
+            "ERROR",
+            "settings",
+            "AI 连接检测失败",
+            details={
+                "elapsedMs": elapsed_ms,
+                "errorType": exc.__class__.__name__,
+                "error": str(exc)[:4000],
+            },
+            duration_ms=elapsed_ms,
+        )
+        raise
+    elapsed_ms = round((monotonic() - started) * 1000)
+    log_event(
+        "INFO",
+        "settings",
+        "AI 连接检测成功",
+        details={
+            "elapsedMs": elapsed_ms,
+            "latencyMs": result.get("latencyMs"),
+            "model": result.get("model"),
+            "message": result.get("message"),
+        },
+        duration_ms=elapsed_ms,
+    )
+    return result
+
+
+def _test_ai_connection(settings: Settings) -> dict:
     if not settings.ai_configured:
         raise AIConfigurationError("AI_API_KEY、AI_BASE_URL、AI_MODEL 尚未配置完整。")
 
@@ -126,6 +173,47 @@ def test_ai_connection(settings: Settings) -> dict:
 
 
 def test_duolingo_connection(
+    settings: Settings,
+    client: DuolingoClient | None = None,
+) -> dict:
+    started = monotonic()
+    log_event(
+        "INFO",
+        "settings",
+        "多邻国连接检测开始",
+        details={
+            "courseId": settings.duolingo_course_id,
+            "fromLanguage": settings.duolingo_from_language,
+        },
+    )
+    try:
+        result = _test_duolingo_connection(settings, client)
+    except Exception as exc:
+        elapsed_ms = round((monotonic() - started) * 1000)
+        log_event(
+            "ERROR",
+            "settings",
+            "多邻国连接检测失败",
+            details={
+                "elapsedMs": elapsed_ms,
+                "errorType": exc.__class__.__name__,
+                "error": str(exc)[:2000],
+            },
+            duration_ms=elapsed_ms,
+        )
+        raise
+    elapsed_ms = round((monotonic() - started) * 1000)
+    log_event(
+        "INFO",
+        "settings",
+        "多邻国连接检测成功",
+        details={**result, "elapsedMs": elapsed_ms},
+        duration_ms=elapsed_ms,
+    )
+    return result
+
+
+def _test_duolingo_connection(
     settings: Settings,
     client: DuolingoClient | None = None,
 ) -> dict:

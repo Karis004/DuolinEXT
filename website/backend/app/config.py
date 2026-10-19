@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -5,6 +6,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 WEBSITE_DIR = Path(__file__).resolve().parents[2]
+ENV_FILE_PATH = Path(
+    os.environ.get("DUOLINEXT_ENV_FILE", str(WEBSITE_DIR / ".env"))
+)
 DATABASE_DIR = WEBSITE_DIR / "backend" / "data"
 DEFAULT_DATABASE_PATH = DATABASE_DIR / "duolinext.db"
 LEGACY_DATABASE_PATH = DATABASE_DIR / "duolinex.db"
@@ -29,7 +33,7 @@ class Settings(BaseSettings):
     database_url: str = f"sqlite:///{DEFAULT_DATABASE_PATH.as_posix()}"
 
     model_config = SettingsConfigDict(
-        env_file=WEBSITE_DIR / ".env",
+        env_file=ENV_FILE_PATH,
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -41,15 +45,15 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    return Settings(_env_file=ENV_FILE_PATH)
 
 
 def reload_settings() -> Settings:
-    """Discard the cached environment settings and load them again.
+    """Discard cached settings and read the .env file again.
 
-    The database engine is initialized once at process startup, so callers
-    should use this for runtime service settings (API credentials, model,
-    language and timezone). A DATABASE_URL change still requires a restart.
+    The database engine is initialized once at process startup, so this
+    refreshes runtime service settings (API credentials, model, language and
+    timezone). A DATABASE_URL change still requires a restart.
     """
     get_settings.cache_clear()
     return get_settings()

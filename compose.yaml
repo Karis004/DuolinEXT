@@ -4,9 +4,12 @@ services:
       context: ./website
       dockerfile: backend/Dockerfile
     user: "${DUOLINEXT_UID:-1000}:${DUOLINEXT_GID:-1000}"
-    env_file:
-      - ./website/.env
+    environment:
+      DUOLINEXT_ENV_FILE: /config/website/.env
+    # Mount the directory, not the .env file: editors often replace the file
+    # inode, which would leave a single-file bind mount reading stale values.
     volumes:
+      - ./website:/config/website:ro
       - ./website/backend/data:/app/website/backend/data
     restart: unless-stopped
     init: true

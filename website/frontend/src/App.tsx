@@ -8,6 +8,8 @@ import {
   ChevronRight,
   Circle,
   Clock3,
+  Copy,
+  Download,
   Headphones,
   Layers3,
   ListTree,
@@ -22,6 +24,8 @@ import {
   AlertCircle,
   Server,
   Play,
+  Terminal,
+  Trash2,
   Volume2,
   X,
   MessageCircle,
@@ -39,6 +43,8 @@ import type {
   CourseSkill,
   DashboardData,
   LessonContent,
+  LogEntry,
+  LogsData,
   SessionDetail,
   SkillSessionSummary,
   Word,
@@ -689,6 +695,190 @@ function VocabularyPanel({ data, onClose }: { data: VocabularyData | null; onClo
   )
 }
 
+function formatLogTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const time = new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date)
+  return `${time}.${String(date.getMilliseconds()).padStart(3, '0')}`
+}
+
+function logEntryText(entry: LogEntry) {
+  return JSON.stringify(
+    {
+      id: entry.id,
+      createdAt: entry.createdAt,
+      level: entry.level,
+      category: entry.category,
+      message: entry.message,
+      durationMs: entry.durationMs,
+      requestId: entry.requestId,
+      details: entry.details,
+    },
+    null,
+    2,
+  )
+}
+
+function LogsPanel({ onClose }: { onClose: () => void }) {
+  const [logs, setLogs] = useState<LogsData | null>(null)
+  const [level, setLevel] = useState('ALL')
+  const [category, setCategory] = useState('ALL')
+  const [query, setQuery] = useState('')
+  const [autoRefresh, setAutoRefresh] = useState(true)
+  const [error, setError] = useState('')
+  const [copied, setCopied] = useState<number | null>(null)
+
+  useEffect(() => {
+    let active = true
+    const load = () => {
+      const params = new URLSearchParams({ limit: '300' })
+      if (level !== 'ALL') params.set('level', level)
+      if (category !== 'ALL') params.set('category', category)
+      if (query.trim()) params.set('q', query.trim())
+      void api<LogsData>(`/api/logs?${params.toString()}`)
+        .then((payload) => {
+          if (!active) return
+          setLogs(payload)
+          setError('')
+        })
+        .catch((caught) => {
+          if (active) setError(caught instanceof Error ? caught.message : '日志加载失败')
+        })
+    }
+    load()
+    if (!autoRefresh) return () => { active = false }
+    const timer = window.setInterval(load, 2500)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [level, category, query, autoRefresh])
+
+  const clear = async () => {
+    if (!window.confirm('清空全部运行日志？此操作不可恢复。')) return
+    try {
+      await api('/api/logs', { method: 'DELETE' })
+      setLogs({ items: [], total: 0, latestId: null, retention: logs?.retention ?? 5000 })
+      setError('')
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '清空日志失败')
+    }
+  }
+
+  const copy = async (entry: LogEntry) => {
+    try {
+      await navigator.clipboard.writeText(logEntryText(entry))
+      setCopied(entry.id)
+      window.setTimeout(() => setCopied(null), 1200)
+    } catch {
+      setError('复制失败，请手动选择日志文本。')
+    }
+  }
+
+  const levels = [
+    ['ALL', '全部'],
+    ['INFO', 'INFO'],
+    ['WARNING', '警告'],
+    ['ERROR', '错误'],
+  ] as const
+  const categories = [
+    'ALL',
+    'http',
+    'ai',
+    'sync',
+    'generation',
+    'vocabulary',
+    'settings',
+    'tutor',
+    'app',
+  ]
+
+  return (
+    <div className="logs-overlay" role="presentation">
+      <div className="logs-panel" role="dialog" aria-modal="true" aria-label="运行日志">
+        <header className="settings-heading">
+          <div><span className="eyebrow">Developer logs</span><h2>运行日志</h2></div>
+          <button className="drawer-close" onClick={onClose} title="关闭运行日志"><X size={20} /></button>
+        </header>
+
+        <div className="logs-toolbar">
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索消息、分类或 request id"
+            aria-label="搜索日志"
+          />
+          <div className="logs-levels">
+            {levels.map(([value, label]) => (
+              <button
+                key={value}
+                className={level === value ? 'active' : ''}
+                onClick={() => setLevel(value)}
+              >{label}</button>
+            ))}
+          </div>
+          <select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="日志分类">
+            {categories.map((item) => (
+              <option key={item} value={item}>{item === 'ALL' ? '全部分类' : item}</option>
+            ))}
+          </select>
+          <button className={`secondary-button ${autoRefresh ? 'active' : ''}`} onClick={() => setAutoRefresh((value) => !value)}>
+            <RefreshCw size={15} className={autoRefresh ? 'spinning' : ''} />
+            {autoRefresh ? '自动刷新' : '已暂停'}
+          </button>
+          <a className="secondary-button logs-export" href={`${API_BASE}/api/logs/export`} download>
+            <Download size={15} />导出
+          </a>
+          <button className="secondary-button logs-clear" onClick={() => void clear()}>
+            <Trash2 size={15} />清空
+          </button>
+        </div>
+
+        <div className="logs-summary">
+          <span>显示 {logs?.items.length ?? 0} / {logs?.total ?? 0} 条 · 保留最近 {logs?.retention ?? 5000} 条</span>
+          <span>{autoRefresh ? '每 2.5 秒刷新' : '自动刷新已暂停'}</span>
+        </div>
+
+        {error && <div className="inline-error">{error}</div>}
+
+        <div className="logs-list">
+          {!logs && !error && <div className="logs-empty"><LoaderCircle size={18} className="spinning" />正在读取日志</div>}
+          {logs && logs.items.length === 0 && <div className="logs-empty"><ScrollText size={20} />暂无日志</div>}
+          {logs?.items.map((entry) => (
+            <details className="log-row" key={entry.id}>
+              <summary>
+                <span className="log-time">{formatLogTime(entry.createdAt)}</span>
+                <span className={`log-level ${entry.level}`}>{entry.level}</span>
+                <span className="log-category">{entry.category}</span>
+                <span className="log-message">{entry.message}</span>
+                <span className="log-duration">{entry.durationMs != null ? `${entry.durationMs} ms` : ''}</span>
+                <span className="log-request">{entry.requestId ?? ''}</span>
+              </summary>
+              <div className="log-detail">
+                <div className="log-detail-head">
+                  <span>#{entry.id}</span>
+                  <button className="log-copy" onClick={() => void copy(entry)}>
+                    {copied === entry.id ? <Check size={13} /> : <Copy size={13} />}
+                    {copied === entry.id ? '已复制' : '复制'}
+                  </button>
+                </div>
+                <pre>{JSON.stringify(entry.details ?? {}, null, 2)}</pre>
+              </div>
+            </details>
+          ))}
+        </div>
+
+        <p className="logs-note">日志只记录请求元数据，不包含课程正文、提示词、API Key 或 JWT；上游错误正文会脱敏后保留。</p>
+      </div>
+    </div>
+  )
+}
+
 function SessionIcon({ session }: { session: SkillSessionSummary }) {
   if (!session.isCompleted) return <LockKeyhole size={14} />
   if (!session.isSynced) return <RefreshCw size={14} />
@@ -703,7 +893,6 @@ function sessionStatus(session: SkillSessionSummary) {
   if (session.generationStatus === 'generating') return '正在生成课程'
   if (session.generationStatus === 'outlining') return '正在更新大纲'
   if (session.generationStatus === 'error') return '课程生成失败'
-  if (session.generationStatus === 'outline_error' && !session.hasContent) return '大纲生成失败'
   if (session.wordCount === 0) return '无新增词 · 已完成'
   if (session.learningCompleted) return '已完成'
   if (session.hasContent) return '学习中'
@@ -1031,6 +1220,7 @@ export default function App() {
   const [pathOpen, setPathOpen] = useState(false)
   const [outlineOpen, setOutlineOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [logsOpen, setLogsOpen] = useState(false)
   const [voiceStatus, setVoiceStatus] = useState<FrenchVoiceStatus | null>(null)
 
   const today = useMemo(
@@ -1182,6 +1372,7 @@ export default function App() {
             {((data?.generation.outdatedLessons ?? 0) + (data?.generation.failedLessons ?? 0)) > 0 && <b>{(data?.generation.outdatedLessons ?? 0) + (data?.generation.failedLessons ?? 0)}</b>}
           </button>
           <button className="outline-button" onClick={() => setVocabularyOpen(true)} title="打开词汇表"><Library size={16} /><span>词汇表</span></button>
+          <button className="outline-button" onClick={() => setLogsOpen(true)} title="打开运行日志"><Terminal size={16} /><span>日志</span></button>
           <button className="settings-button" onClick={() => setSettingsOpen(true)} title="打开设置" aria-label="打开设置"><SettingsIcon size={18} /></button>
           <button className="path-toggle" onClick={() => setPathOpen(true)} title="打开课程路径"><Menu size={18} /></button>
           <button
@@ -1207,6 +1398,7 @@ export default function App() {
       )}
       {error && <div className="error-banner">{error}</div>}
       {settingsOpen && <SettingsPanel voiceStatus={voiceStatus} onVoiceStatusChange={setVoiceStatus} onClose={() => setSettingsOpen(false)} />}
+      {logsOpen && <LogsPanel onClose={() => setLogsOpen(false)} />}
       {outlineOpen && (
         <>
           <button className="drawer-scrim" onClick={() => setOutlineOpen(false)} aria-label="关闭课程大纲" />

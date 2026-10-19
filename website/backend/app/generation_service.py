@@ -15,6 +15,7 @@ from .ai import (
     generate_outline_content,
 )
 from .config import AI_MAX_ATTEMPTS, AI_RETRY_BASE_SECONDS, Settings
+from .logging_service import log_event
 from .models import CourseSkill, GenerationTask, SessionLesson, SkillSession
 from .session_service import (
     get_or_create_session_lesson,
@@ -61,6 +62,20 @@ def _run_ai_generator(
                 message = f"{exc}（已尝试 {attempt} 次）"
                 raise exc.__class__(message) from exc
             delay = max(0.0, AI_RETRY_BASE_SECONDS) * (2 ** (attempt - 1))
+            log_event(
+                "WARNING",
+                "ai",
+                f"{request_kind} 第 {attempt} 次失败，准备重试",
+                details={
+                    "requestKind": request_kind,
+                    "attempt": attempt,
+                    "limit": limit,
+                    "delaySeconds": delay,
+                    "errorType": exc.__class__.__name__,
+                    "error": str(exc)[:2000],
+                },
+                duration_ms=round((time.monotonic() - started) * 1000),
+            )
             logger.warning(
                 "AI %s attempt %d/%d failed after %.1fs: %s; retrying in %.1fs",
                 request_kind,
@@ -221,6 +236,25 @@ def _mark_generation_error(
     session.commit()
 
 
+def _lesson_metrics(content: dict | None) -> dict:
+    if not isinstance(content, dict):
+        return {}
+    grammar = content.get("grammarLesson")
+    if not isinstance(grammar, dict):
+        grammar = {}
+    return {
+        "wordNotes": len(content.get("wordNotes") or []),
+        "grammarRules": len(grammar.get("rules") or []),
+        "transformations": len(grammar.get("transformations") or []),
+        "buildSteps": len(grammar.get("buildSteps") or []),
+        "commonMistakes": len(grammar.get("commonMistakes") or []),
+        "examples": len(content.get("examples") or []),
+        "exercises": len(content.get("exercises") or []),
+        "summary": len(content.get("summary") or []),
+        "chars": len(json.dumps(content, ensure_ascii=False)),
+    }
+
+
 def generate_and_store_session_lesson(
     session: Session,
     settings: Settings,
@@ -260,7 +294,29 @@ def generate_and_store_session_lesson(
         lesson.generation_error = None
         session.add(lesson)
         session.commit()
+        log_event(
+            "INFO",
+            "generation",
+            "课程内容已是最新，跳过生成",
+            details={"sessionId": skill_session.id},
+        )
         return lesson
+
+    log_event(
+        "INFO",
+        "generation",
+        "课程生成开始",
+        details={
+            "sessionId": skill_session.id,
+            "skill": skill.title,
+            "sessionIndex": skill_session.session_index,
+            "wordCount": len(words),
+            "contentNeeded": content_needed,
+            "outlineNeeded": outline_needed,
+            "contentVersion": lesson.content_version,
+            "outlineVersion": lesson.outline_version,
+        },
+    )
 
     lesson.generation_status = "generating"
     lesson.generation_error = None
@@ -270,6 +326,7 @@ def generate_and_store_session_lesson(
     context = course_context_for_session(session, skill_session)
     content = _json_dict(lesson.content_json)
     if content_needed:
+        content_started = time.monotonic()
         try:
             content = _run_ai_generator(
                 lesson_generator,
@@ -282,15 +339,47 @@ def generate_and_store_session_lesson(
                 course_context=context,
             )
         except ValueError as exc:
+            elapsed_ms = round((time.monotonic() - content_started) * 1000)
+            log_event(
+                "ERROR",
+                "generation",
+                "课程正文生成失败",
+                details={
+                    "sessionId": skill_session.id,
+                    "stage": "content",
+                    "elapsedMs": elapsed_ms,
+                    "errorType": exc.__class__.__name__,
+                    "error": str(exc)[:4000],
+                },
+                duration_ms=elapsed_ms,
+            )
             _mark_generation_error(session, lesson, exc)
             raise
+        elapsed_ms = round((time.monotonic() - content_started) * 1000)
+        log_event(
+            "INFO",
+            "generation",
+            "课程正文生成完成",
+            details={
+                "sessionId": skill_session.id,
+                **_lesson_metrics(content),
+            },
+            duration_ms=elapsed_ms,
+        )
 
     if content is None:
         error = ValueError("已保存的课程内容无法解析。")
         _mark_generation_error(session, lesson, error)
+        log_event(
+            "ERROR",
+            "generation",
+            "保存的课程内容无法解析",
+            details={"sessionId": skill_session.id, "error": str(error)},
+        )
         raise error
 
     if outline_needed:
+        outline_started = time.monotonic()
         try:
             outline = _run_ai_generator(
                 outline_generator,
@@ -303,8 +392,35 @@ def generate_and_store_session_lesson(
                 session_index=skill_session.session_index,
             )
         except ValueError as exc:
+            elapsed_ms = round((time.monotonic() - outline_started) * 1000)
+            log_event(
+                "ERROR",
+                "generation",
+                "累计大纲生成失败",
+                details={
+                    "sessionId": skill_session.id,
+                    "stage": "outline",
+                    "elapsedMs": elapsed_ms,
+                    "errorType": exc.__class__.__name__,
+                    "error": str(exc)[:4000],
+                },
+                duration_ms=elapsed_ms,
+            )
             _mark_generation_error(session, lesson, exc)
             raise
+        elapsed_ms = round((time.monotonic() - outline_started) * 1000)
+        log_event(
+            "INFO",
+            "generation",
+            "累计大纲生成完成",
+            details={
+                "sessionId": skill_session.id,
+                "outlineChars": len(json.dumps(outline, ensure_ascii=False)),
+                "grammarLedger": len(outline.get("grammarLedger") or []),
+                "recentSessions": len(outline.get("recentSessions") or []),
+            },
+            duration_ms=elapsed_ms,
+        )
 
         if content_needed:
             lesson.content_json = json.dumps(content, ensure_ascii=False)
@@ -319,6 +435,17 @@ def generate_and_store_session_lesson(
     session.add(lesson)
     session.commit()
     session.refresh(lesson)
+    log_event(
+        "INFO",
+        "generation",
+        "课程生成完成",
+        details={
+            "sessionId": skill_session.id,
+            "contentVersion": lesson.content_version,
+            "outlineVersion": lesson.outline_version,
+            "contentMetrics": _lesson_metrics(content),
+        },
+    )
     return lesson
 
 
@@ -378,7 +505,7 @@ def queue_failed_lessons(session: Session, settings: Settings) -> list[int]:
     queued_ids = []
     for row in _eligible_sessions(session):
         lesson = get_or_create_session_lesson(session, settings, row)
-        if lesson.generation_status not in {"error", "outline_error"}:
+        if lesson.generation_status != "error":
             continue
         lesson.generation_status = "queued"
         lesson.generation_error = None
@@ -434,6 +561,20 @@ def run_generation_batch(
 ) -> None:
     from .database import engine
 
+    started = time.monotonic()
+    completed = 0
+    failed = 0
+    log_event(
+        "INFO",
+        "generation",
+        "批量生成任务开始",
+        details={
+            "taskId": task_id,
+            "sessions": len(skill_session_ids),
+            "upgradeOutdatedContent": upgrade_outdated_content,
+        },
+    )
+
     task: GenerationTask | None = None
     with Session(engine) as session:
         for skill_session_id in skill_session_ids:
@@ -446,6 +587,17 @@ def run_generation_batch(
                     task.current_session_id = None
                     session.add(task)
                     session.commit()
+                    log_event(
+                        "WARNING",
+                        "generation",
+                        "批量生成任务已中断",
+                        details={
+                            "taskId": task.id,
+                            "completed": completed,
+                            "failed": failed,
+                        },
+                        duration_ms=round((time.monotonic() - started) * 1000),
+                    )
                     return
                 task.status = "running"
                 task.started_at = task.started_at or now(settings)
@@ -454,6 +606,13 @@ def run_generation_batch(
                 session.commit()
             row = session.get(SkillSession, skill_session_id)
             if row is None:
+                failed += 1
+                log_event(
+                    "WARNING",
+                    "generation",
+                    "批量生成跳过不存在的 Session",
+                    details={"taskId": task_id, "sessionId": skill_session_id},
+                )
                 continue
             try:
                 generate_and_store_session_lesson(
@@ -462,9 +621,22 @@ def run_generation_batch(
                     row,
                     upgrade_outdated_content=upgrade_outdated_content,
                 )
+                completed += 1
                 if task is not None:
                     task.completed_count += 1
             except ValueError as exc:
+                failed += 1
+                log_event(
+                    "ERROR",
+                    "generation",
+                    "批量生成单个 Session 失败",
+                    details={
+                        "taskId": task_id,
+                        "sessionId": skill_session_id,
+                        "errorType": exc.__class__.__name__,
+                        "error": str(exc)[:4000],
+                    },
+                )
                 if task is not None:
                     task.failed_count += 1
                     task.error_message = str(exc)
@@ -478,6 +650,23 @@ def run_generation_batch(
             task.finished_at = now(settings)
             session.add(task)
             session.commit()
+            status = task.status
+            task_failed = task.failed_count
+        else:
+            status = "completed" if not failed else "partial"
+            task_failed = failed
+        log_event(
+            "INFO" if status == "completed" else "WARNING",
+            "generation",
+            "批量生成任务结束",
+            details={
+                "taskId": task_id,
+                "status": status,
+                "completed": completed,
+                "failed": task_failed,
+            },
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
 
 
 def generation_progress_payload(session: Session) -> dict:
@@ -502,7 +691,7 @@ def generation_progress_payload(session: Session) -> dict:
     )
     failed = sum(
         lessons.get(row.id) is not None
-        and lessons[row.id].generation_status in {"error", "outline_error"}
+        and lessons[row.id].generation_status == "error"
         for row in eligible
     )
     upgradeable = max(0, outdated - failed)

@@ -88,3 +88,36 @@ def test_adds_lesson_generation_metadata_and_preserves_content():
     assert row[1] == '{"currentPosition":"Session 1"}'
     assert row[2] == 1
     assert row[3] == "ready"
+
+
+def test_normalises_legacy_outline_error_status():
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE sessionlesson ("
+            "id INTEGER PRIMARY KEY, "
+            "skill_session_id INTEGER NOT NULL, "
+            "created_at DATETIME NOT NULL, "
+            "content_json VARCHAR, "
+            "outline_json VARCHAR, "
+            "generation_status VARCHAR NOT NULL DEFAULT 'pending'"
+            ")"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO sessionlesson "
+            "(id, skill_session_id, created_at, content_json, outline_json, generation_status) "
+            "VALUES "
+            "(1, 1, '2026-09-01 00:00:00', '{\"title\":\"saved\"}', "
+            "'{\"title\":\"outline\"}', 'outline_error'), "
+            "(2, 2, '2026-09-01 00:00:00', NULL, NULL, 'outline_error')"
+        )
+
+    apply_schema_migrations(engine)
+    apply_schema_migrations(engine)
+
+    with engine.connect() as connection:
+        rows = connection.exec_driver_sql(
+            "SELECT id, generation_status FROM sessionlesson ORDER BY id"
+        ).all()
+
+    assert rows == [(1, "ready"), (2, "error")]

@@ -1,12 +1,14 @@
 import json
 import re
+import time
 
 import httpx
 
 from .config import AI_TIMEOUT_SECONDS, Settings
+from .logging_service import log_event
 
-LESSON_PROMPT_VERSION = 3
-OUTLINE_PROMPT_VERSION = 2
+LESSON_PROMPT_VERSION = 4
+OUTLINE_PROMPT_VERSION = 3
 VOCABULARY_PROMPT_VERSION = 1
 
 
@@ -27,10 +29,11 @@ class AIConfigurationError(AIError):
 
 SYSTEM_PROMPT = """你是一位为中文母语成年人设计系统法语课程的教师。
 课程目标不是背词，而是让学习者逐步理解法语句子的结构，并能用已学词汇自主造句。
-词汇与语法必须同步推进：每节课深入教授一项可操作的语法能力，并有明确的先修关系、规则、变换过程和造句练习。
+词汇与语法必须同步推进：每节课讲清一项可操作的语法能力，并有明确的先修关系、规则、变换过程和造句练习。
+课程面向刚入门、学习时间有限的成年人：一节 5-10 分钟，只保留理解当前句型必需的信息。
 不要假设学习者已经理解主语、谓语、宾语、补语、性数一致或动词变位；只有累计课程大纲明确记录过的知识才可视为已学。
-讲解面向成年人，使用准确的语法与语音术语；不要使用中文谐音、幼儿式口型模仿或空泛鼓励。
-讲解必须准确、具体，优先解释句法结构、冠词与性数、动词人称变位、疑问与否定、固定搭配和容易直译出错的地方。
+讲解使用准确的语法与语音术语，但不做术语堆砌；不要使用中文谐音、幼儿式口型模仿或空泛鼓励。
+发音只说明实际怎么读：给出 IPA，指出最容易读错或最影响连读的一点，不做音系学分析。
 只输出有效 JSON，不要输出 Markdown 代码块。"""
 
 
@@ -146,7 +149,7 @@ def _daily_prompt(
         "previousOutline": None,
         "recentLessons": [],
     }
-    return f"""请生成一节约 15-20 分钟的法语补充课。内容适合屏幕阅读，信息完整但避免大段文字。
+    return f"""请生成一节约 5-10 分钟的法语补充课。目标是 1-2 屏读完，学完能马上用本课词汇造出一句同类句。
 
 多邻国技能：{skill_title}
 Session：{session_index}
@@ -155,71 +158,72 @@ Session：{session_index}
 
 {GRAMMAR_SEQUENCE}
 
-课程衔接规则：
+课程取舍：
+- 一节只解决一个语法点。与当前句型无关的用法、例外和扩展一律省略。
+- 从上述顺序中选择与给定词汇能自然结合、且最早尚未掌握的一项作为 primaryTopic。
+- 讲解要说明句子为什么这样排列、哪个词为什么变化，以及学习者如何自己造出同类句。
 - 阅读 previousOutline.grammarLedger。没有大纲或 ledger 为空时，从“句子成分与基本陈述句”开始，不得直接假设学习者会造句。
-- status=introduced 的知识需要继续解释和练习；status=practiced 可直接使用但至少安排一次检查；status=usable 可作为先修知识，不重复完整讲授。
-- 本课选择一个与给定词汇能自然结合、且在上述顺序中最早尚未掌握的语法能力作为 primaryTopic。
-- 语法讲解必须回答“句子为什么这样排列、哪个词为什么变化、学习者如何自己造出同类句子”，不能只描述例句含义。
+- status=introduced 的知识只做简短复现；status=practiced 可安排一次检查；status=usable 可直接使用，不再解释。
 - 不得把大纲中晚于本 Session 的内容当作先修知识。
+- 中文解释用短句，每个字段只说一个重点；不写背景铺垫、鼓励语或同义反复。
+- 整节中文解释总量控制在 800-1100 字。宁可少讲一个细节，也不要把页面写满。
 
 严格返回以下结构。所有需要朗读的法语内容必须放在明确的法语字段中，不要把整句法语藏在中文 explanation 里：
 {{
   "title": "简短中文标题",
-  "overview": "本课词汇主题与可造句能力（不超过80字）",
-  "wordNotes": [{{"word": "法语单词", "ipa": "IPA 音标", "partOfSpeech": "词性及必要的阴阳性", "forms": "本课需要知道的词形变化，可为空", "explanation": "中文用法讲解，1-2句，不超过70字"}}],
+  "overview": "本课词汇主题与可造句能力，不超过 50 字",
+  "wordNotes": [{{"word": "法语单词", "ipa": "IPA 音标", "partOfSpeech": "词性及必要的阴阳性", "forms": "本课需要知道的词形变化，可为空", "explanation": "中文用法，1 句，不超过 45 字"}}],
   "pronunciation": {{
-    "focus": "本课真正出现的语音规则概述；若无特殊规则则明确说明",
+    "focus": "一句话说明本课最该注意的读法，不超过 40 字",
     "wordIpa": [{{"word": "本课法语词", "ipa": "规范 IPA"}}],
     "rules": [{{
       "title": "规则名称",
       "type": "spelling|sound|liaison|enchaînement|elision|rhythm",
-      "explanation": "准确说明触发条件和实际读法",
+      "explanation": "触发条件和实际读法，不超过 50 字",
       "examples": [{{"french": "本课中的词或短语", "ipa": "对应 IPA"}}],
-      "contrastWithEnglish": "仅当英法同一拼写或音标容易混淆时说明，可为空"
+      "contrastWithEnglish": "仅当英法同一拼写容易误读时写一句，否则留空"
     }}]
   }},
   "grammarLesson": {{
     "stage": "A0/A1 阶段与能力名称",
     "primaryTopic": "本课唯一的主要新语法能力",
-    "objective": "学完后学习者能够自主完成的造句任务",
-    "prerequisites": ["本课会复用的已学知识；没有则为空"],
+    "objective": "学完后能独立完成的一个造句任务，不超过 40 字",
+    "prerequisites": ["本课会复用的已学知识，最多 3 项；没有则为空"],
     "sentencePattern": "抽象句型骨架，例如 主语 + être变位 + 表语",
-    "coreExplanation": "用短句解释各句子成分、词序、变化原因及适用范围，不超过150字",
+    "coreExplanation": "用 2-3 句说明句子成分、词序和变化原因，不超过 90 字",
     "rules": [{{
-      "title": "具体规则",
-      "explanation": "规则及为什么这样变化，1-2句，不超过80字",
+      "title": "核心规则",
+      "explanation": "规则及为什么这样变化，不超过 50 字",
       "forms": [{{"french": "词形或结构", "chinese": "含义", "note": "人称/性数/使用条件"}}]
     }}],
     "transformations": [{{
       "label": "陈述变否定/陈述变疑问/人称或性数变化等",
       "before": "变化前法语句子",
       "after": "变化后法语句子",
-      "explanation": "指出移动、添加或发生词形变化的部分，不超过65字"
+      "explanation": "指出移动、添加或发生词形变化的部分，不超过 40 字"
     }}],
     "buildSteps": [{{
       "step": 1,
       "french": "逐步构造出的法语成分或句子",
       "chinese": "中文意思",
-      "explanation": "这一步选择该形式和位置的原因，不超过55字"
+      "explanation": "这一步选择该形式和位置的原因，不超过 35 字"
     }}],
-    "commonMistakes": [{{"wrong": "典型错误", "correct": "正确形式", "explanation": "错误原因，不超过55字"}}],
-    "reviewPoint": "本课如何复用一项之前学过的语法能力，可为空"
+    "commonMistakes": [{{"wrong": "典型错误", "correct": "正确形式", "explanation": "错误原因，不超过 40 字"}}],
+    "reviewPoint": "本课如何复用一项之前学过的语法能力，一句话，可为空"
   }},
-  "examples": [{{"french": "法语例句", "ipa": "整句 IPA 音标", "chinese": "中文翻译", "note": "标出本课句型和关键词形，不超过50字"}}],
-  "exercises": [{{"type": "identify|transform|build|translate", "question": "题目", "french": "法语题干，可为空", "constraints": ["必须使用的结构"], "answerFrench": "法语答案", "answer": "中文答案或补充", "explanation": "按句子成分和词形解析答案，不超过70字"}}],
-  "summary": ["本课学会的词汇和造句能力"]
+  "examples": [{{"french": "法语例句", "ipa": "整句 IPA 音标", "chinese": "中文翻译", "note": "标出本课句型和关键词形，不超过 30 字"}}],
+  "exercises": [{{"type": "identify|transform|build|translate", "question": "题目", "french": "法语题干，可为空", "constraints": ["必须使用的结构"], "answerFrench": "法语答案", "answer": "中文答案或补充", "explanation": "按句子成分和词形解析答案，不超过 50 字"}}],
+  "summary": ["本课学会的词汇或造句能力，2-3 条"]
 }}
 
 质量要求：
-- 中文解释使用短句或分点式信息；每个字段只解释一个重点，不重复 overview 或其他字段。
-- 不写背景铺垫、鼓励语或同义反复；单个中文段落最多 2 句，避免超过 3 行屏幕文字。
-- wordNotes 覆盖全部给定词汇，必须有 IPA 和准确词性；名词注明阴阳性，动词注明不定式和本课出现的变位。
-- grammarLesson 是课程主体，不能空泛。至少 2 条 rules、1 个 transformation、3 个 buildSteps、2 个 commonMistakes。
-- transformations 只教授当前阶段可理解的变化；若本课尚未学否定或疑问，用人称、性数或成分替换展示结构变化。
-- 4-6 个 exercises，必须包含至少一道逐步造句 build 和一道句子变换 transform，不能全部是识别题。
-- examples 和造句尽量复用本课词汇，可以加入最少量 A0 功能词使句子自然。
-- pronunciation.wordIpa 覆盖全部给定词汇；rules 只选 1-3 个本课真实出现且可归纳的规则。不要逐词写“口型/气流/像中文某音”，不要中文谐音；没有特殊现象时 rules 可为空。
-- 只有存在真实的拼写或音值干扰时才与英语对比。准确区分 liaison、enchaînement、élision 和普通连读；不要把法语重音写成英语式单词固定重音。
+- 5-10 分钟能读完：中文解释总量约 800-1100 字，单个中文段落最多 2 句。
+- wordNotes 覆盖全部给定词汇，每条只写 1 句用法；必须有 IPA 和准确词性；名词注明阴阳性，动词注明不定式和本课出现的变位。
+- grammarLesson 是课程主体，但不能写成语法讲义：1-2 条 rules、1 个 transformation、2-3 个 buildSteps、1-2 个 commonMistakes。
+- 3 道 exercises，至少 1 道 transform 和 1 道 build，不要重复同一个句型。
+- examples 2-3 句，尽量复用本课词汇，可以加入最少量 A0 功能词使句子自然。
+- pronunciation 只回答“怎么读”：wordIpa 覆盖全部给定词汇；rules 只选 1-2 个本课真实出现、影响词形或连读的规则，每条最多 1 个例子。不要逐音素拆解，不要描述口型或气流，不要中文谐音；没有值得说明的现象时 rules 为空。
+- 只有英法同一拼写或同一音标确实容易混淆时才写 contrastWithEnglish。
 - 不虚构规则、词性、性别或变位。"""
 
 
@@ -240,7 +244,7 @@ def _outline_prompt(
 {{
   "title": "法语学习总览",
   "currentPosition": "当前学到哪里",
-  "courseSummary": "不超过120字的累计进度总结",
+  "courseSummary": "不超过100字的累计进度总结",
   "learnedThemes": ["已经覆盖的交流主题，最多8项"],
   "grammarLedger": [{{
     "topic": "语法能力名称",
@@ -249,13 +253,13 @@ def _outline_prompt(
     "lastPosition": "最近讲解或练习该能力的 Skill / Session"
   }}],
   "pronunciationProgress": ["已经明确学过的语音规则，最多6项"],
-  "recentSessions": [{{"position": "Skill / Session", "focus": "本节核心，不超过40字"}}],
+  "recentSessions": [{{"position": "Skill / Session", "focus": "本节核心，不超过30字"}}],
   "nextFocus": ["接下来值得巩固的方向，最多4项"]
 }}
 
 状态更新规则：本节首次系统讲解的 primaryTopic 标为 introduced；在后续至少一节课中再次用于造句或变换后可升为 practiced；在至少两节更晚课程中作为先修并实际用于造句或变换后才可标 usable。这里记录的是课程覆盖和可复用状态，不是假定学习者通过了测验；不得仅因出现一次就标 usable。
 
-要求：这是累计大纲，不是本节课复述；按语法先修顺序保留全部 grammarLedger，不要删除较早基础知识；相同 topic 合并并更新状态；保留最近最多 6 节 recentSessions；只写课程中确实出现过的能力；整体保持紧凑，供下一节课作为上下文使用。"""
+要求：这是累计大纲，不是本节课复述；按语法先修顺序保留全部 grammarLedger，不要删除较早基础知识；相同 topic 合并并更新状态；保留最近最多 6 节 recentSessions；只写课程中确实出现过的能力；不要复述课程正文；整体保持紧凑，供下一节课作为上下文使用。"""
 
 
 def _normalise_lesson_content(content: dict, words: list[dict]) -> dict:
@@ -306,7 +310,7 @@ def _normalise_lesson_content(content: dict, words: list[dict]) -> dict:
                 else []
             )
             normalised_rules.append(rule)
-    pronunciation["rules"] = normalised_rules[:3]
+    pronunciation["rules"] = normalised_rules[:2]
     items = pronunciation.get("items")
     pronunciation["items"] = (
         [item for item in items if isinstance(item, dict)]
@@ -374,10 +378,10 @@ def _validate_lesson_design(content: dict, words: list[dict]) -> None:
             if not str(grammar.get(key) or "").strip():
                 issues.append(f"grammarLesson.{key} 为空")
         requirements = {
-            "rules": 2,
+            "rules": 1,
             "transformations": 1,
-            "buildSteps": 3,
-            "commonMistakes": 2,
+            "buildSteps": 2,
+            "commonMistakes": 1,
         }
         for key, minimum in requirements.items():
             if len(grammar.get(key) or []) < minimum:
@@ -389,8 +393,8 @@ def _validate_lesson_design(content: dict, words: list[dict]) -> None:
         for item in exercises
         if isinstance(item, dict)
     }
-    if len(exercises) < 4:
-        issues.append("exercises 少于 4 项")
+    if len(exercises) < 3:
+        issues.append("exercises 少于 3 项")
     for required_type in ("build", "transform"):
         if required_type not in exercise_types:
             issues.append(f"exercises 缺少 {required_type} 类型")
@@ -456,8 +460,15 @@ def _request_ai_json(
     system_prompt: str = SYSTEM_PROMPT,
     timeout_seconds: float | None = None,
     use_reasoning: bool = True,
+    request_kind: str = "lesson",
 ) -> dict:
     if not settings.ai_configured:
+        log_event(
+            "ERROR",
+            "ai",
+            f"AI 配置不完整：{request_kind}",
+            details={"kind": request_kind},
+        )
         raise AIConfigurationError("AI_API_KEY、AI_BASE_URL、AI_MODEL 尚未配置完整。")
 
     request_body = {
@@ -473,9 +484,26 @@ def _request_ai_json(
         request_body["reasoning_effort"] = settings.ai_reasoning_effort
 
     effective_timeout = timeout_seconds or AI_TIMEOUT_SECONDS
+    url = _chat_completions_url(settings.ai_base_url)
+    request_details = {
+        "kind": request_kind,
+        "url": url,
+        "model": settings.ai_model,
+        "reasoningEffort": (
+            settings.ai_reasoning_effort if use_reasoning else None
+        ),
+        "timeoutSeconds": effective_timeout,
+        "promptChars": len(prompt),
+        "systemPromptChars": len(system_prompt),
+        "messageCount": 2,
+        "responseFormat": "json_object",
+    }
+    started = time.monotonic()
+    log_event("INFO", "ai", f"AI 请求开始：{request_kind}", details=request_details)
+
     try:
         response = httpx.post(
-            _chat_completions_url(settings.ai_base_url),
+            url,
             headers={
                 "Authorization": f"Bearer {settings.ai_api_key}",
                 "Content-Type": "application/json",
@@ -484,13 +512,68 @@ def _request_ai_json(
             timeout=httpx.Timeout(effective_timeout, connect=10.0),
         )
     except httpx.TimeoutException as exc:
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        log_event(
+            "ERROR",
+            "ai",
+            f"AI 请求超时：{request_kind}",
+            details={
+                **request_details,
+                "elapsedMs": elapsed_ms,
+                "errorType": exc.__class__.__name__,
+                "error": str(exc),
+            },
+            duration_ms=elapsed_ms,
+        )
         raise AITransientError(
             f"AI 请求超时（上限 {effective_timeout:g} 秒）。\n"
             + _format_ai_network_error(exc, settings, "AI")
         ) from exc
     except httpx.RequestError as exc:
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        log_event(
+            "ERROR",
+            "ai",
+            f"AI 网络请求失败：{request_kind}",
+            details={
+                **request_details,
+                "elapsedMs": elapsed_ms,
+                "errorType": exc.__class__.__name__,
+                "error": str(exc),
+            },
+            duration_ms=elapsed_ms,
+        )
         raise AITransientError(_format_ai_network_error(exc, settings, "AI")) from exc
+
+    elapsed_ms = round((time.monotonic() - started) * 1000)
+    request_id = next(
+        (
+            response.headers[name]
+            for name in ("x-request-id", "x-correlation-id", "cf-ray", "x-amzn-requestid")
+            if response.headers.get(name)
+        ),
+        None,
+    )
+    response_details = {
+        **request_details,
+        "statusCode": response.status_code,
+        "reasonPhrase": response.reason_phrase,
+        "elapsedMs": elapsed_ms,
+        "bodyChars": len(response.text),
+        "requestId": request_id,
+    }
+
     if response.status_code in (401, 403):
+        log_event(
+            "ERROR",
+            "ai",
+            f"AI 鉴权失败：{request_kind}（HTTP {response.status_code}）",
+            details={
+                **response_details,
+                "errorBody": _redact_ai_error(response.text, settings)[:4000],
+            },
+            duration_ms=elapsed_ms,
+        )
         raise AIConfigurationError(_format_ai_http_error(response, settings, "AI 鉴权"))
     if response.status_code >= 400:
         error_type = (
@@ -499,17 +582,57 @@ def _request_ai_json(
             or response.status_code >= 500
             else AIError
         )
+        log_event(
+            "ERROR" if response.status_code >= 500 else "WARNING",
+            "ai",
+            f"AI 请求失败：{request_kind}（HTTP {response.status_code}）",
+            details={
+                **response_details,
+                "errorBody": _redact_ai_error(response.text, settings)[:4000],
+            },
+            duration_ms=elapsed_ms,
+        )
         raise error_type(_format_ai_http_error(response, settings, "AI 请求"))
 
+    content = ""
     try:
         payload = response.json()
         message = payload["choices"][0]["message"]
         content = _message_content_text(message)
         if not content:
             raise ValueError("AI 响应中没有可解析的 message.content。")
-        return _parse_json_content(content)
+        parsed = _parse_json_content(content)
     except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        log_event(
+            "ERROR",
+            "ai",
+            f"AI 响应解析失败：{request_kind}",
+            details={
+                **response_details,
+                "errorType": exc.__class__.__name__,
+                "error": str(exc),
+                "contentChars": len(content),
+            },
+            duration_ms=elapsed_ms,
+        )
         raise AIValidationError("AI 响应结构中没有有效的课程内容。") from exc
+
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    server_model = payload.get("model") if isinstance(payload, dict) else None
+    log_event(
+        "INFO",
+        "ai",
+        f"AI 响应成功：{request_kind}",
+        details={
+            **response_details,
+            "serverModel": server_model,
+            "contentChars": len(content),
+            "parseOk": True,
+            "usage": usage,
+        },
+        duration_ms=elapsed_ms,
+    )
+    return parsed
 
 
 TUTOR_SYSTEM_PROMPT = """你是 DuolinEXT 的法语学习即时辅导老师。
@@ -556,8 +679,23 @@ def ask_tutor(
     if settings.ai_reasoning_effort:
         request_body["reasoning_effort"] = settings.ai_reasoning_effort
     if not settings.ai_configured:
+        log_event("ERROR", "tutor", "AI 辅导配置不完整")
         raise AIConfigurationError("AI_API_KEY、AI_BASE_URL、AI_MODEL 尚未配置完整。")
     tutor_timeout = min(AI_TIMEOUT_SECONDS, 35)
+    request_details = {
+        "kind": "tutor",
+        "url": _chat_completions_url(settings.ai_base_url),
+        "model": settings.ai_model,
+        "reasoningEffort": settings.ai_reasoning_effort or None,
+        "timeoutSeconds": tutor_timeout,
+        "promptChars": len(prompt),
+        "questionChars": len(question),
+        "selectedChars": len(selected_text),
+        "historyCount": len(compact_messages),
+        "maxTokens": 320,
+    }
+    started = time.monotonic()
+    log_event("INFO", "tutor", "AI 辅导请求开始", details=request_details)
     try:
         response = httpx.post(
             _chat_completions_url(settings.ai_base_url),
@@ -569,20 +707,104 @@ def ask_tutor(
             timeout=httpx.Timeout(tutor_timeout, connect=5.0),
         )
     except httpx.TimeoutException as exc:
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        log_event(
+            "ERROR",
+            "tutor",
+            "AI 辅导请求超时",
+            details={
+                **request_details,
+                "elapsedMs": elapsed_ms,
+                "errorType": exc.__class__.__name__,
+                "error": str(exc),
+            },
+            duration_ms=elapsed_ms,
+        )
         raise AITransientError(
             f"AI 辅导请求超时（上限 {tutor_timeout:g} 秒）。\n"
             + _format_ai_network_error(exc, settings, "AI 辅导")
         ) from exc
     except httpx.RequestError as exc:
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        log_event(
+            "ERROR",
+            "tutor",
+            "AI 辅导网络请求失败",
+            details={
+                **request_details,
+                "elapsedMs": elapsed_ms,
+                "errorType": exc.__class__.__name__,
+                "error": str(exc),
+            },
+            duration_ms=elapsed_ms,
+        )
         raise AITransientError(_format_ai_network_error(exc, settings, "AI 辅导")) from exc
+
+    elapsed_ms = round((time.monotonic() - started) * 1000)
+    request_id = next(
+        (
+            response.headers[name]
+            for name in ("x-request-id", "x-correlation-id", "cf-ray", "x-amzn-requestid")
+            if response.headers.get(name)
+        ),
+        None,
+    )
+    response_details = {
+        **request_details,
+        "statusCode": response.status_code,
+        "reasonPhrase": response.reason_phrase,
+        "elapsedMs": elapsed_ms,
+        "bodyChars": len(response.text),
+        "requestId": request_id,
+    }
     if response.status_code >= 400:
+        log_event(
+            "ERROR" if response.status_code >= 500 else "WARNING",
+            "tutor",
+            f"AI 辅导请求失败（HTTP {response.status_code}）",
+            details={
+                **response_details,
+                "errorBody": _redact_ai_error(response.text, settings)[:4000],
+            },
+            duration_ms=elapsed_ms,
+        )
         raise AIError(_format_ai_http_error(response, settings, "AI 辅导请求"))
     try:
-        answer = _message_content_text(response.json()["choices"][0]["message"]).strip()
+        payload = response.json()
+        answer = _message_content_text(payload["choices"][0]["message"]).strip()
     except (KeyError, IndexError, TypeError, ValueError) as exc:
+        log_event(
+            "ERROR",
+            "tutor",
+            "AI 辅导响应解析失败",
+            details={
+                **response_details,
+                "errorType": exc.__class__.__name__,
+                "error": str(exc),
+            },
+            duration_ms=elapsed_ms,
+        )
         raise AIValidationError("AI 辅导没有返回有效回答。") from exc
     if not answer:
+        log_event(
+            "ERROR",
+            "tutor",
+            "AI 辅导返回空回答",
+            details=response_details,
+            duration_ms=elapsed_ms,
+        )
         raise AIValidationError("AI 辅导没有返回有效回答。")
+    log_event(
+        "INFO",
+        "tutor",
+        "AI 辅导响应成功",
+        details={
+            **response_details,
+            "answerChars": len(answer),
+            "usage": payload.get("usage") if isinstance(payload, dict) else None,
+        },
+        duration_ms=elapsed_ms,
+    )
     return answer
 
 
@@ -612,6 +834,7 @@ def generate_vocabulary_profiles(settings: Settings, words: list[dict]) -> list[
         system_prompt=VOCABULARY_SYSTEM_PROMPT,
         timeout_seconds=min(AI_TIMEOUT_SECONDS, 30),
         use_reasoning=False,
+        request_kind="vocabulary",
     )
     items = result.get("items")
     return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
@@ -634,6 +857,7 @@ def generate_lesson_content(
             session_index,
             course_context,
         ),
+        request_kind="lesson",
     )
     normalised = _normalise_lesson_content(content, words)
     try:
@@ -660,5 +884,6 @@ def generate_outline_content(
             level_index,
             session_index,
         ),
+        request_kind="outline",
     )
     return _normalise_outline_content(content)

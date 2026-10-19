@@ -1,10 +1,12 @@
 import json
+import time
 from datetime import datetime, timedelta
 
 from sqlmodel import Session, col, select
 
 from .ai import VOCABULARY_PROMPT_VERSION, generate_vocabulary_profiles
 from .config import Settings
+from .logging_service import log_event
 from .models import Lexeme, LexemeForm, VocabularyTask, Word, WordLexeme
 from .session_service import now, serialize_word
 
@@ -121,6 +123,13 @@ def run_vocabulary_batch(
 ) -> None:
     from .database import engine
 
+    started = time.monotonic()
+    log_event(
+        "INFO",
+        "vocabulary",
+        "词形整理任务开始",
+        details={"taskId": task_id, "words": len(word_ids)},
+    )
     with Session(engine) as session:
         task = session.get(VocabularyTask, task_id) if task_id else None
         if task is not None:
@@ -140,8 +149,20 @@ def run_vocabulary_batch(
                     task.finished_at = now(settings)
                     session.add(task)
                     session.commit()
+                    log_event(
+                        "WARNING",
+                        "vocabulary",
+                        "词形整理任务已中断",
+                        details={
+                            "taskId": task.id,
+                            "completed": task.completed_count,
+                            "failed": task.failed_count,
+                        },
+                        duration_ms=round((time.monotonic() - started) * 1000),
+                    )
                     return
             chunk = words[offset : offset + chunk_size]
+            chunk_started = time.monotonic()
             try:
                 profiles = generate_vocabulary_profiles(
                     settings, [serialize_word(word) for word in chunk]
@@ -158,11 +179,34 @@ def run_vocabulary_batch(
                     else:
                         _mark_word_error(session, word, settings, "AI 未返回该词的词形资料。")
                 session.commit()
+                log_event(
+                    "INFO",
+                    "vocabulary",
+                    "词形批次完成",
+                    details={
+                        "taskId": task_id,
+                        "batchSize": len(chunk),
+                        "profiles": len(profiles),
+                    },
+                    duration_ms=round((time.monotonic() - chunk_started) * 1000),
+                )
             except Exception as exc:
                 session.rollback()
                 for word in chunk:
                     _mark_word_error(session, word, settings, str(exc))
                 session.commit()
+                log_event(
+                    "ERROR",
+                    "vocabulary",
+                    "词形批次失败",
+                    details={
+                        "taskId": task_id,
+                        "batchSize": len(chunk),
+                        "errorType": exc.__class__.__name__,
+                        "error": str(exc)[:3000],
+                    },
+                    duration_ms=round((time.monotonic() - chunk_started) * 1000),
+                )
             if task is not None:
                 task.completed_count += len(chunk)
                 task.failed_count += sum(
@@ -184,6 +228,25 @@ def run_vocabulary_batch(
             task.finished_at = now(settings)
             session.add(task)
             session.commit()
+            final_status = task.status
+            final_failed = task.failed_count
+            final_completed = task.completed_count
+        else:
+            final_status = "completed"
+            final_failed = 0
+            final_completed = len(words)
+        log_event(
+            "INFO" if final_status == "completed" else "WARNING",
+            "vocabulary",
+            "词形整理任务结束",
+            details={
+                "taskId": task_id,
+                "status": final_status,
+                "completed": final_completed,
+                "failed": final_failed,
+            },
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
 
 
 def _mark_word_error(session: Session, word: Word, settings: Settings, message: str) -> None:

@@ -181,3 +181,18 @@ def test_reload_settings_discards_cached_environment_values(monkeypatch):
     assert reload_settings().ai_model == "after-reload"
 
     get_settings.cache_clear()
+
+
+def test_reload_settings_rereads_env_file_without_restart(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("AI_MODEL=model-one\n", encoding="utf-8")
+    monkeypatch.setattr("app.config.ENV_FILE_PATH", env_file)
+    monkeypatch.delenv("AI_MODEL", raising=False)
+    get_settings.cache_clear()
+
+    assert get_settings().ai_model == "model-one"
+
+    env_file.write_text("AI_MODEL=model-two\n", encoding="utf-8")
+
+    assert reload_settings().ai_model == "model-two"
+    get_settings.cache_clear()

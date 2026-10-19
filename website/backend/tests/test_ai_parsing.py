@@ -47,14 +47,16 @@ def test_v2_prompt_requires_progressive_sentence_building_and_technical_pronunci
         1,
     )
 
-    assert LESSON_PROMPT_VERSION == 3
-    assert OUTLINE_PROMPT_VERSION == 2
+    assert LESSON_PROMPT_VERSION == 4
+    assert OUTLINE_PROMPT_VERSION == 3
     assert '"grammarLesson"' in prompt
     assert '"sentencePattern"' in prompt
     assert '"buildSteps"' in prompt
     assert "句子成分与基本陈述句" in prompt
     assert "不要中文谐音" in prompt
-    assert "rules 只选 1-3 个" in prompt
+    assert "rules 只选 1-2 个" in prompt
+    assert "5-10 分钟" in prompt
+    assert "800-1100 字" in prompt
 
 
 def test_normalise_v2_lesson_and_outline_nested_structures():
@@ -106,3 +108,39 @@ def test_v2_design_validation_rejects_shallow_grammar():
             },
             [{"text": "bonjour"}],
         )
+
+
+def test_compact_lesson_structure_is_accepted():
+    _validate_lesson_design(
+        {
+            "grammarLesson": {
+                "primaryTopic": "基本陈述句",
+                "objective": "能造一句主谓句",
+                "sentencePattern": "主语 + 动词",
+                "coreExplanation": "主语在前，变位动词在后。",
+                "rules": [{"title": "词序", "explanation": "先主语后动词。"}],
+                "transformations": [{"before": "Je parle.", "after": "Tu parles."}],
+                "buildSteps": [{"step": 1}, {"step": 2}],
+                "commonMistakes": [{"wrong": "Je parler.", "correct": "Je parle."}],
+            },
+            "wordNotes": [{"word": "bonjour"}],
+            "pronunciation": {
+                "wordIpa": [{"word": "bonjour", "ipa": "/bɔ̃.ʒuʁ/"}]
+            },
+            "exercises": [
+                {"type": "transform"},
+                {"type": "build"},
+                {"type": "translate"},
+            ],
+        },
+        [{"text": "bonjour"}],
+    )
+
+
+def test_pronunciation_rules_are_limited_to_two():
+    result = _normalise_lesson_content(
+        {"pronunciation": {"rules": [{"title": str(index)} for index in range(3)]}},
+        [{"text": "bonjour"}],
+    )
+
+    assert [rule["title"] for rule in result["pronunciation"]["rules"]] == ["0", "1"]

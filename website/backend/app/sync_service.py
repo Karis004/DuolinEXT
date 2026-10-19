@@ -6,6 +6,7 @@ from sqlmodel import Session, col, select
 
 from .config import Settings
 from .duolingo import DuolingoClient
+from .logging_service import log_event
 from .models import (
     CourseSkill,
     SessionLesson,
@@ -262,6 +263,17 @@ def sync_course_progress(
             session, settings, checkpoint, introduced_words
         )
         session.commit()
+        log_event(
+            "INFO",
+            "sync",
+            "已同步 Session 词汇",
+            details={
+                "skill": course_skill.title,
+                "sessionIndex": checkpoint.session_index,
+                "fetchedWords": len(raw_words),
+                "newWords": len(introduced_words),
+            },
+        )
 
         synced_session_count += 1
         changed_skill_ids.add(course_skill.id)

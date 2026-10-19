@@ -151,3 +151,14 @@ class SessionLesson(SQLModel, table=True):
     outline_generated_at: datetime | None = None
     generation_status: str = "pending"
     generation_error: str | None = None
+
+
+class SystemLog(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    created_at: datetime = Field(index=True)
+    level: str = Field(index=True)
+    category: str = Field(index=True)
+    message: str
+    details_json: str = "{}"
+    duration_ms: int | None = None
+    request_id: str | None = Field(default=None, index=True)

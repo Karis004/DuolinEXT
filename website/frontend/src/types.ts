@@ -149,7 +149,7 @@ export type SkillSessionSummary = {
   hasContent: boolean
   contentVersion: number
   outlineVersion: number
-  generationStatus: 'pending' | 'queued' | 'generating' | 'outlining' | 'ready' | 'error' | 'outline_error'
+  generationStatus: 'pending' | 'queued' | 'generating' | 'outlining' | 'ready' | 'error'
   generationError?: string
   learningCompleted: boolean
   completedAt?: string
@@ -194,6 +194,24 @@ export type CourseOutlineContent = {
   pronunciationProgress: string[]
   recentSessions: Array<{ position: string; focus: string }>
   nextFocus: string[]
+}
+
+export type LogEntry = {
+  id: number
+  createdAt: string
+  level: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR'
+  category: string
+  message: string
+  details: unknown
+  durationMs?: number | null
+  requestId?: string | null
+}
+
+export type LogsData = {
+  items: LogEntry[]
+  total: number
+  latestId: number | null
+  retention: number
 }
 
 export type DashboardData = {

@@ -1,10 +1,13 @@
 import asyncio
+import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlmodel import Session, col, func, select
 
 from .config import Settings, get_settings, reload_settings
@@ -24,6 +27,14 @@ from .generation_service import (
 )
 from .models import CourseSkill, SkillSession, SyncRun, VocabularyTask, Word
 from .ai import AIConfigurationError, AIError, ask_tutor
+from .logging_service import (
+    clear_logs,
+    export_logs,
+    list_logs,
+    log_event,
+    reset_request_id,
+    set_request_id,
+)
 from .settings_service import (
     settings_status,
     test_ai_connection,
@@ -43,6 +54,7 @@ from .session_service import (
     default_session,
     progress_counts,
     serialize_session_detail,
+    serialize_word,
 )
 from .sync_service import sync_course_progress
 
@@ -51,11 +63,22 @@ from .sync_service import sync_course_progress
 async def lifespan(_: FastAPI):
     create_db_and_tables()
     settings = get_settings()
+    log_event(
+        "INFO",
+        "app",
+        "后端启动",
+        details={
+            "timezone": settings.app_timezone,
+            "aiConfigured": settings.ai_configured,
+            "aiModel": settings.ai_model if settings.ai_configured else None,
+        },
+    )
     with Session(engine) as session:
         has_pending_vocabulary = vocabulary_pending_count(session) > 0
     if settings.ai_configured and has_pending_vocabulary:
         asyncio.create_task(_start_vocabulary_backfill(settings))
     yield
+    log_event("INFO", "app", "后端停止")
 
 
 async def _start_vocabulary_backfill(settings: Settings) -> None:
@@ -92,6 +115,66 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def log_api_requests(request, call_next):
+    path = request.url.path
+    if (
+        not path.startswith("/api/")
+        or path.startswith("/api/logs")
+        or path == "/api/health"
+    ):
+        return await call_next(request)
+
+    request_id = uuid.uuid4().hex[:12]
+    token = set_request_id(request_id)
+    started = time.monotonic()
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        log_event(
+            "ERROR",
+            "http",
+            f"{request.method} {path} 未处理异常",
+            details={
+                "method": request.method,
+                "path": path,
+                "client": request.client.host if request.client else None,
+                "errorType": exc.__class__.__name__,
+                "error": str(exc)[:4000],
+            },
+            duration_ms=elapsed_ms,
+            request_id=request_id,
+        )
+        raise
+    finally:
+        reset_request_id(token)
+
+    elapsed_ms = round((time.monotonic() - started) * 1000)
+    level = (
+        "INFO"
+        if response.status_code < 400
+        else "WARNING"
+        if response.status_code < 500
+        else "ERROR"
+    )
+    log_event(
+        level,
+        "http",
+        f"{request.method} {path} -> {response.status_code}",
+        details={
+            "method": request.method,
+            "path": path,
+            "statusCode": response.status_code,
+            "client": request.client.host if request.client else None,
+        },
+        duration_ms=elapsed_ms,
+        request_id=request_id,
+    )
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 
 def current_time(settings: Settings) -> datetime:
@@ -175,9 +258,15 @@ def configuration_status(settings: Settings = Depends(get_settings)) -> dict:
 @app.post("/api/settings/reload")
 def reload_configuration() -> dict:
     settings = reload_settings()
+    log_event(
+        "INFO",
+        "settings",
+        "已重新读取 .env 配置",
+        details=settings_status(settings),
+    )
     return {
         "success": True,
-        "message": "已重新读取 .env 配置。",
+        "message": f"已重新读取 .env 配置。当前 AI 模型：{settings.ai_model or '未配置'}。",
         "configuration": settings_status(settings),
     }
 
@@ -211,6 +300,40 @@ def check_duolingo_connection(
         raise HTTPException(status_code=status_code, detail=exc.message) from exc
 
 
+@app.get("/api/logs")
+def logs(
+    limit: int = 200,
+    level: str | None = None,
+    category: str | None = None,
+    q: str | None = None,
+    after_id: int | None = None,
+) -> dict:
+    return list_logs(
+        limit=limit,
+        level=level,
+        category=category,
+        query=q,
+        after_id=after_id,
+    )
+
+
+@app.delete("/api/logs")
+def delete_logs() -> dict:
+    return {"success": True, "deleted": clear_logs()}
+
+
+@app.get("/api/logs/export")
+def export_log_file() -> JSONResponse:
+    payload = export_logs()
+    filename = f"duolinext-logs-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+    return JSONResponse(
+        content=payload,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
+
+
 @app.get("/api/dashboard")
 def dashboard(
     selected_session_id: int | None = None,
@@ -234,6 +357,15 @@ def sync_duolingo(
         raise HTTPException(status_code=409, detail="词汇表正在整理，请稍后再同步。")
     if sync_in_progress(session):
         raise HTTPException(status_code=409, detail="多邻国同步已经在进行中。")
+    log_event(
+        "INFO",
+        "sync",
+        "开始同步多邻国",
+        details={
+            "selectedSessionId": selected_session_id,
+            "aiConfigured": settings.ai_configured,
+        },
+    )
     sync_run = SyncRun(started_at=current_time(settings))
     session.add(sync_run)
     session.commit()
@@ -247,8 +379,11 @@ def sync_duolingo(
         sync_run.new_count = result["newCount"]
         session.add(sync_run)
         session.commit()
+        lesson_queue_count = 0
+        word_queue_count = 0
         if settings.ai_configured:
             queued_ids = queue_incomplete_lessons(session, settings)
+            lesson_queue_count = len(queued_ids)
             lesson_task = None
             if queued_ids:
                 lesson_task = create_generation_task(
@@ -257,6 +392,7 @@ def sync_duolingo(
             word_ids = []
             if active_vocabulary_task(session) is None:
                 word_ids = queue_vocabulary_words(session, settings)
+            word_queue_count = len(word_ids)
             vocabulary_task = None
             if word_ids:
                 vocabulary_task = create_vocabulary_task(session, settings, word_ids)
@@ -269,6 +405,16 @@ def sync_duolingo(
                     vocabulary_task.id if vocabulary_task else None,
                     settings,
                 )
+        log_event(
+            "INFO",
+            "sync",
+            "多邻国同步成功",
+            details={
+                **result,
+                "lessonQueued": lesson_queue_count,
+                "wordQueued": word_queue_count,
+            },
+        )
         return dashboard_payload(session, settings, selected_session_id)
     except DuolingoError as exc:
         sync_run.status = "failed"
@@ -277,6 +423,12 @@ def sync_duolingo(
         sync_run.error_message = exc.message
         session.add(sync_run)
         session.commit()
+        log_event(
+            "ERROR",
+            "sync",
+            "多邻国同步失败",
+            details={"code": exc.code, "message": exc.message},
+        )
         raise HTTPException(
             status_code=401 if exc.code in {"token_missing", "user_id_missing", "auth_failed"} else 502,
             detail={"code": exc.code, "message": exc.message},
@@ -305,15 +457,47 @@ def generate_session_lesson(
     row = session.get(SkillSession, skill_session_id)
     if row is None or row.level_index != 0:
         raise HTTPException(status_code=404, detail="Session 不存在。")
+    log_event(
+        "INFO",
+        "generation",
+        "手动生成课程开始",
+        details={
+            "sessionId": skill_session_id,
+            "skillId": row.course_skill_id,
+            "sessionIndex": row.session_index,
+            "wordCount": row.word_count,
+        },
+    )
     try:
-        generate_and_store_session_lesson(
+        lesson = generate_and_store_session_lesson(
             session,
             settings,
             row,
             force_content=True,
         )
     except ValueError as exc:
+        log_event(
+            "ERROR",
+            "generation",
+            "手动生成课程失败",
+            details={
+                "sessionId": skill_session_id,
+                "errorType": exc.__class__.__name__,
+                "error": str(exc)[:4000],
+            },
+        )
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    log_event(
+        "INFO",
+        "generation",
+        "手动生成课程完成",
+        details={
+            "sessionId": skill_session_id,
+            "status": lesson.generation_status,
+            "contentVersion": lesson.content_version,
+            "outlineVersion": lesson.outline_version,
+        },
+    )
     return dashboard_payload(session, settings, skill_session_id)
 
 
@@ -330,6 +514,12 @@ def upgrade_lessons(
     queued_ids = queue_outdated_lessons(session, settings)
     if queued_ids:
         task = create_generation_task(session, settings, "upgrade", queued_ids)
+        log_event(
+            "INFO",
+            "generation",
+            "批量升级旧课程已排队",
+            details={"taskId": task.id, "total": task.total_count},
+        )
         background_tasks.add_task(
             run_generation_batch, queued_ids, settings, True, task.id
         )
@@ -349,6 +539,12 @@ def generate_missing_lessons(
     queued_ids = queue_incomplete_lessons(session, settings)
     if queued_ids:
         task = create_generation_task(session, settings, "missing", queued_ids)
+        log_event(
+            "INFO",
+            "generation",
+            "批量生成未完成课程已排队",
+            details={"taskId": task.id, "total": task.total_count},
+        )
         background_tasks.add_task(
             run_generation_batch, queued_ids, settings, False, task.id
         )
@@ -368,6 +564,12 @@ def retry_failed_lessons(
     queued_ids = queue_failed_lessons(session, settings)
     if queued_ids:
         task = create_generation_task(session, settings, "retry", queued_ids)
+        log_event(
+            "INFO",
+            "generation",
+            "批量重试失败课程已排队",
+            details={"taskId": task.id, "total": task.total_count},
+        )
         background_tasks.add_task(
             run_generation_batch, queued_ids, settings, False, task.id
         )
@@ -380,6 +582,16 @@ def cancel_generation(
     settings: Settings = Depends(get_settings),
 ) -> dict:
     task = request_generation_cancel(session)
+    log_event(
+        "INFO",
+        "generation",
+        "请求中断批量任务",
+        details={
+            "found": task is not None,
+            "taskId": task.id if task else None,
+            "status": task.status if task else None,
+        },
+    )
     return dashboard_payload(session, settings)
 
 
@@ -401,15 +613,30 @@ def tutor_ask(
     question = str(payload.get("question") or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="请输入问题。")
+    selected_text = str(payload.get("selectedText") or "").strip()
+    messages = payload.get("messages") if isinstance(payload.get("messages"), list) else []
+    log_event(
+        "INFO",
+        "tutor",
+        "收到 AI 辅导请求",
+        details={
+            "sessionId": skill_session_id,
+            "skill": skill.title,
+            "sessionIndex": row.session_index,
+            "questionChars": len(question),
+            "selectedChars": len(selected_text),
+            "historyCount": len(messages),
+        },
+    )
     try:
         answer = ask_tutor(
             settings,
             skill_title=skill.title,
             session_index=row.session_index,
             course_outline=(latest_outline_payload(session) or {}).get("content"),
-            selected_text=str(payload.get("selectedText") or "").strip(),
+            selected_text=selected_text,
             question=question,
-            messages=payload.get("messages") if isinstance(payload.get("messages"), list) else [],
+            messages=messages,
         )
     except AIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -427,6 +654,12 @@ def vocabulary(
         word_ids = queue_vocabulary_words(session, settings)
         if word_ids:
             task = create_vocabulary_task(session, settings, word_ids)
+            log_event(
+                "INFO",
+                "vocabulary",
+                "已创建词形整理任务",
+                details={"taskId": task.id, "words": len(word_ids)},
+            )
             background_tasks.add_task(
                 run_vocabulary_batch, word_ids, settings, task.id
             )
@@ -462,7 +695,19 @@ def complete_session_lesson(
     try:
         complete_session(session, settings, row)
     except ValueError as exc:
+        log_event(
+            "ERROR",
+            "generation",
+            "标记课程完成失败",
+            details={"sessionId": skill_session_id, "error": str(exc)},
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_event(
+        "INFO",
+        "generation",
+        "课程已标记完成",
+        details={"sessionId": skill_session_id},
+    )
     return dashboard_payload(session, settings, skill_session_id)
 
 

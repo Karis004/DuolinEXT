@@ -101,6 +101,22 @@ def apply_schema_migrations(target_engine=engine) -> None:
                 ")"
             )
 
+            # `outline_error` is a legacy status. Content and outline are now
+            # generated atomically, so normalize any old rows to a real state.
+            connection.exec_driver_sql(
+                "UPDATE sessionlesson SET generation_status = 'ready' "
+                "WHERE generation_status = 'outline_error' "
+                "AND content_json IS NOT NULL AND content_json != '' "
+                "AND outline_json IS NOT NULL AND outline_json != ''"
+            )
+            connection.exec_driver_sql(
+                "UPDATE sessionlesson SET "
+                "generation_status = 'error', "
+                "generation_error = COALESCE(generation_error, "
+                "'课程与大纲必须成对生成，请重新生成。') "
+                "WHERE generation_status = 'outline_error'"
+            )
+
         if (
             {"skillsession", "sessionlesson"}.issubset(table_names)
             and "study_completed_at" in lesson_columns

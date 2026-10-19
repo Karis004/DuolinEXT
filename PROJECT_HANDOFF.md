@@ -1,6 +1,6 @@
 # DuolinEXT 工程交接
 
-> 本文面向后续开发者与 AI。开始修改代码前应同时阅读根目录 `README.md`。最后更新：2026-09-20。
+> 本文面向后续开发者与 AI。开始修改代码前应同时阅读根目录 `README.md`。最后更新：2026-10-19。
 
 ## 1. 产品边界
 
@@ -11,7 +11,8 @@ DuolinEXT 是单用户、本地优先的法语辅助学习应用。用户继续�
 - 词汇与语法同步学习，而不是只做单词卡。
 - 语法应从句子结构、人称变位、性数一致、否定和疑问等基础逐步推进。
 - 发音使用 IPA、节奏、连读和省音等真实规则，不使用中文谐音教学。
-- 课程详细但易读，避免密集长文和无目的重复。
+- 课程聚焦、易读，单节控制在 5-10 分钟，避免密集长文和无目的重复。
+- 发音只给 IPA、实际读法和最影响连读的一点，不做音系学分析或口型描述。
 - AI 辅导只解决当前小问题，不重新生成整节课。
 - 词汇表只展示初学阶段需要识别的核心词形，不做完整词典。
 
@@ -57,11 +58,12 @@ DuolinEXT 是单用户、本地优先的法语辅助学习应用。用户继续�
 | `generation_service.py` | 课程与累计大纲生成、版本和批量任务 |
 | `vocabulary_service.py` | Lexeme、核心词形和词汇任务 |
 | `ai.py` | prompt、AI 请求、JSON 解析与输出校验 |
+| `logging_service.py` | 运行日志写入、查询、脱敏、导出与保留上限 |
 
 ### 前端
 
 - React 19、TypeScript、Vite、`lucide-react`。
-- `App.tsx` 当前包含主布局、课程路径、课程内容、大纲、词汇表和 AI 辅导。
+- `App.tsx` 当前包含主布局、课程路径、课程内容、大纲、词汇表、运行日志和 AI 辅导。
 - `types.ts` 定义前后端响应结构。
 - `audio/frenchAudio.ts` 统一处理多邻国音频和浏览器法语 TTS。
 - `styles.css` 包含桌面与移动端布局。
@@ -83,6 +85,7 @@ DuolinEXT 是单用户、本地优先的法语辅助学习应用。用户继续�
 - `LexemeForm`：原型的核心词形。
 - `WordLexeme`：表面词形与原型关联。
 - `VocabularyTask`：词形整理任务。
+- `SystemLog`：运行日志，含级别、分类、消息、脱敏元数据、耗时和 request id。
 
 旧的按日期 `Lesson`/`LessonWord` 体系已退出运行链路，源码模型和服务已删除。为了保护已有数据库，迁移代码不会主动删除真实数据库中的旧表。
 
@@ -119,16 +122,17 @@ DuolinEXT 是单用户、本地优先的法语辅助学习应用。用户继续�
 - 一个流程内先生成正文，再生成大纲。
 - 大纲失败时不能留下只有正文的半成品。
 - 较早 Session 的大纲上下文必须按该 Session 的路径位置截断，后续课程不能倒灌。
+- 单节按 5-10 分钟、1-2 屏设计；语法只讲一个主要能力，发音只保留 1-2 条实际读法规则。
 
 当前版本常量位于 `ai.py`：
 
-- `LESSON_PROMPT_VERSION = 3`
-- `OUTLINE_PROMPT_VERSION = 2`
+- `LESSON_PROMPT_VERSION = 4`
+- `OUTLINE_PROMPT_VERSION = 3`
 - `VOCABULARY_PROMPT_VERSION = 1`
 
 修改 prompt、JSON 协议或影响既有结果语义时，必须提升对应版本号并检查批量升级逻辑。旧课程数据应保留，除非用户明确执行升级。
 
-课程生成状态包括 `pending`、`queued`、`generating`、`outlining`、`ready`、`error` 和 `outline_error`。批量任务必须有明确的 queued/running/completed/partial/cancelled/error 结果。
+课程生成状态包括 `pending`、`queued`、`generating`、`outlining`、`ready` 和 `error`。正文与大纲原子绑定，大纲失败同样记为 `error`；旧库中的 `outline_error` 会在启动迁移时归一化（完整课程转为 `ready`，其余转为 `error`）。批量任务必须有明确的 queued/running/completed/partial/cancelled/error 结果。
 
 ## 7. AI 即时辅导
 
@@ -160,7 +164,7 @@ DuolinEXT 是单用户、本地优先的法语辅助学习应用。用户继续�
 - `GET /api/settings/status`：只返回配置完整度、脱敏用户 ID、无凭据的 AI endpoint 和模型信息。
 - `POST /api/settings/test-duolingo`：读取当前课程概要，不写数据库。
 - `POST /api/settings/test-ai`：发送最多 16 tokens 的短连接测试，只有用户点击时调用。
-- `POST /api/settings/reload`：清除后端配置缓存并重新读取 `.env`，返回脱敏后的配置状态；不返回 JWT/API key。数据库引擎等启动资源不在运行时切换范围内。
+- `POST /api/settings/reload`：清除后端配置缓存并从 `DUOLINEXT_ENV_FILE`（默认 `website/.env`）重新读取，返回脱敏后的配置状态；不返回 JWT/API key。Docker 将 `./website` 只读挂载到 `/config/website` 并设置 `DUOLINEXT_ENV_FILE=/config/website/.env`，不要改回单文件挂载：部分编辑器保存时会替换 inode，容器可能仍读到旧文件。数据库引擎等启动资源不在运行时切换范围内。
 
 浏览器无法替用户安装系统语音包。若未检测到法语语音，前端应显示对应操作系统的安装路径，并在 `voiceschanged` 后自动刷新状态。
 
@@ -172,9 +176,10 @@ DuolinEXT 是单用户、本地优先的法语辅助学习应用。用户继续�
 - `operation`：同步、加载、生成、升级、重试、取消、完成等互斥操作。
 - `tutorOpen`、`tutorText`、`tutorRect`、`tutorMessages`：Session 内临时辅导。
 - `vocabularyOpen`、`vocabulary`：词汇表及任务进度。
+- `logsOpen`：开发者运行日志面板；面板内独立维护级别、分类、搜索和自动刷新状态。
 - `pathOpen`、`outlineOpen`：移动端/抽屉 UI。
 
-课程存在运行中任务或待生成内容时，Dashboard 每 3 秒刷新；词汇表打开时每 3 秒刷新 `/api/vocabulary`。轮询只能访问本地 API。
+课程存在运行中任务或待生成内容时，Dashboard 每 3 秒刷新；词汇表打开时每 3 秒刷新 `/api/vocabulary`；运行日志面板打开时每 2.5 秒刷新 `/api/logs`。轮询只能访问本地 API。
 
 Session 选择保存在 `duolinext.selectedSessionId`。前端会读取并清理旧的 `duolinex.selectedSessionId`，保证名称升级后保留用户位置。
 
@@ -196,6 +201,9 @@ Session 选择保存在 `duolinext.selectedSessionId`。前端会读取并清理
 - `POST /api/tutor/ask`
 - `GET /api/vocabulary`
 - `GET /api/words`
+- `GET /api/logs`（支持 `limit`、`level`、`category`、`q`、`after_id`）
+- `DELETE /api/logs`
+- `GET /api/logs/export`（JSON 下载）
 
 课程生成、词汇整理和同步之间存在互斥检查。新增写操作前先确认不会与现有后台任务并发破坏 SQLite 状态。
 
@@ -224,6 +232,7 @@ npm --prefix frontend run build
 ## 12. 安全与发布
 
 - 不读取、输出或提交真实 JWT、AI key、完整 `.env` 或个人数据库。
+- 运行日志只保存请求元数据和脱敏错误正文，不保存课程正文、完整 prompt、JWT 或 API key；日志查询/清空/导出接口没有独立认证，公开部署前必须限制访问。
 - 当前 CORS 只允许本地 Vite 地址。
 - 当前没有认证、用户隔离和限流，不得直接公开部署。
 - 支持多人之前必须先给所有业务模型增加 user/account 维度。
