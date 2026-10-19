@@ -70,6 +70,15 @@ DuolinEXT 是单用户、本地优先的法语辅助学习应用。用户继续�
 
 `App.tsx` 体积较大。小改动应沿用现有结构；涉及多个独立视图的大功能可以按课程、词汇表、辅导和大纲边界拆分组件，但不要为了单一改动先做无关重构。
 
+样式约定（`styles.css` 顶部集中定义）：
+
+- 字体：UI 用 `--font-sans`，法语正文用 `--font-serif`，序号/日志/代码用 `--font-mono`；IPA 保持系统无衬线字体。
+- 类型层级：页面标题 30px、面板标题 22px、正文 14px、密集说明 13px、元信息 11px、标签 10px、徽标 9px；不要在同一层级混用 15/17/19px 等孤立字号。
+- 颜色只用 token：`--ink`/`--muted`/`--quiet`/`--faint`、`--paper`/`--canvas`/`--panel`、`--accent`、`--danger`/`--warn`/`--info`；不要新增近似色。
+- 控件：标准高度 `--control-h`（38px），紧凑控件 `--control-h-sm`（34px），圆角 `--radius`（4px），过渡 `--transition`。
+- 视觉语言保持编辑式网格：细线分隔、少阴影、方形品牌块、衬线法语、无衬线 UI；不要引入大圆角卡片或渐变。
+- 响应式断点：980px 隐藏日期，760px 顶栏只留图标并启用侧栏抽屉，480px 进一步压缩间距；新增顶栏按钮时要检查 320px 宽度不溢出。
+
 ## 4. 数据模型
 
 当前业务表：
@@ -132,7 +141,7 @@ DuolinEXT 是单用户、本地优先的法语辅助学习应用。用户继续�
 
 修改 prompt、JSON 协议或影响既有结果语义时，必须提升对应版本号并检查批量升级逻辑。旧课程数据应保留，除非用户明确执行升级。
 
-课程生成状态包括 `pending`、`queued`、`generating`、`outlining`、`ready` 和 `error`。正文与大纲原子绑定，大纲失败同样记为 `error`；旧库中的 `outline_error` 会在启动迁移时归一化（完整课程转为 `ready`，其余转为 `error`）。批量任务必须有明确的 queued/running/completed/partial/cancelled/error 结果。
+课程生成状态包括 `pending`、`queued`、`generating`、`outlining`、`ready` 和 `error`。正文与大纲原子绑定，大纲失败同样记为 `error`；旧库中的 `outline_error` 会在启动迁移时归一化（完整课程转为 `ready`，其余转为 `error`）。批量任务 kind 包括 `missing`、`upgrade`、`retry`、`upgrade-unlearned` 和 `upgrade-unlearned-missing`，状态必须明确为 queued/running/completed/partial/cancelled/error。`upgrade-unlearned` 只处理尚未完成学习的旧课程，不覆盖已学完内容；带 `-missing` 的 kind 同时补齐缺失课程。
 
 ## 7. AI 即时辅导
 
@@ -195,6 +204,7 @@ Session 选择保存在 `duolinext.selectedSessionId`。前端会读取并清理
 - `POST /api/sessions/{id}/generate`
 - `POST /api/sessions/{id}/complete`
 - `POST /api/lessons/upgrade`
+- `POST /api/lessons/upgrade-unlearned`（`include_missing=true` 时同时生成缺失课程）
 - `POST /api/lessons/generate-missing`
 - `POST /api/lessons/retry-failed`
 - `POST /api/lessons/generation/cancel`

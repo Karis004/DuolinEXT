@@ -14,9 +14,11 @@ from app.config import Settings
 from app.generation_service import (
     course_context_for_session,
     generate_and_store_session_lesson,
+    generation_progress_payload,
     queue_incomplete_lessons,
     queue_failed_lessons,
     queue_outdated_lessons,
+    queue_unlearned_outdated_lessons,
 )
 from app.models import CourseSkill, SessionLesson, SessionWord, SkillSession, Word
 
@@ -117,6 +119,20 @@ def outline_content(position: str) -> dict:
         "recentSessions": [],
         "nextFocus": [],
     }
+
+
+def add_old_lesson(session: Session, row: SkillSession) -> None:
+    session.add(
+        SessionLesson(
+            skill_session_id=row.id,
+            created_at=datetime.now(),
+            content_json=json.dumps(lesson_content("old")),
+            content_version=0,
+            outline_json=json.dumps(outline_content("old")),
+            outline_version=0,
+            generation_status="ready",
+        )
+    )
 
 
 def test_saved_lesson_is_reused_without_new_ai_calls(engine, settings):
@@ -262,6 +278,71 @@ def test_upgrade_queue_excludes_incomplete_lessons(engine, settings):
     assert queued == []
     assert first_lesson.generation_status == "ready"
     assert second_lesson.generation_status == "pending"
+
+
+def test_unlearned_upgrade_queue_skips_learned_lessons(engine, settings):
+    with Session(engine) as session:
+        first, second = setup_course(session)
+        first.completed_at = datetime.now()
+        add_old_lesson(session, first)
+        add_old_lesson(session, second)
+        session.commit()
+        second_id = second.id
+
+        queued = queue_unlearned_outdated_lessons(session, settings)
+        first_lesson = session.exec(
+            select(SessionLesson).where(SessionLesson.skill_session_id == first.id)
+        ).one()
+        second_lesson = session.exec(
+            select(SessionLesson).where(SessionLesson.skill_session_id == second.id)
+        ).one()
+
+    assert queued == [second_id]
+    assert first_lesson.generation_status == "ready"
+    assert second_lesson.generation_status == "queued"
+
+
+def test_unlearned_upgrade_queue_can_include_missing_lessons(engine, settings):
+    with Session(engine) as session:
+        first, second = setup_course(session)
+        first.completed_at = datetime.now()
+        skill = session.get(CourseSkill, first.course_skill_id)
+        third = add_session(session, skill, 3, "third")
+        add_old_lesson(session, first)
+        add_old_lesson(session, second)
+        session.commit()
+        second_id = second.id
+        third_id = third.id
+
+        queued = queue_unlearned_outdated_lessons(
+            session,
+            settings,
+            include_missing=True,
+        )
+        third_lesson = session.exec(
+            select(SessionLesson).where(SessionLesson.skill_session_id == third.id)
+        ).one()
+
+    assert queued == [second_id, third_id]
+    assert third_lesson.generation_status == "queued"
+
+
+def test_progress_counts_only_unlearned_outdated_lessons(engine, settings):
+    with Session(engine) as session:
+        first, second = setup_course(session)
+        first.completed_at = datetime.now()
+        skill = session.get(CourseSkill, first.course_skill_id)
+        add_session(session, skill, 3, "third")
+        add_old_lesson(session, first)
+        add_old_lesson(session, second)
+        session.commit()
+
+        progress = generation_progress_payload(session)
+
+    assert progress["unlearnedOutdatedLessons"] == 1
+    assert progress["incompleteLessons"] == 1
+    assert progress["upgradeableLessons"] == 2
+    assert progress["outdatedLessons"] == 3
 
 
 def test_context_is_empty_before_first_lesson(engine):

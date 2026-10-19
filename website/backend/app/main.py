@@ -22,6 +22,7 @@ from .generation_service import (
     queue_failed_lessons,
     queue_incomplete_lessons,
     queue_outdated_lessons,
+    queue_unlearned_outdated_lessons,
     request_generation_cancel,
     run_generation_batch,
 )
@@ -519,6 +520,46 @@ def upgrade_lessons(
             "generation",
             "批量升级旧课程已排队",
             details={"taskId": task.id, "total": task.total_count},
+        )
+        background_tasks.add_task(
+            run_generation_batch, queued_ids, settings, True, task.id
+        )
+    return dashboard_payload(session, settings, selected_session_id)
+
+
+@app.post("/api/lessons/upgrade-unlearned")
+def upgrade_unlearned_lessons(
+    background_tasks: BackgroundTasks,
+    include_missing: bool = False,
+    selected_session_id: int | None = None,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    if not settings.ai_configured:
+        raise HTTPException(status_code=400, detail="AI 尚未配置。")
+    ensure_generation_available(session)
+    queued_ids = queue_unlearned_outdated_lessons(
+        session,
+        settings,
+        include_missing=include_missing,
+    )
+    if queued_ids:
+        kind = (
+            "upgrade-unlearned-missing"
+            if include_missing
+            else "upgrade-unlearned"
+        )
+        task = create_generation_task(session, settings, kind, queued_ids)
+        log_event(
+            "INFO",
+            "generation",
+            "未学习课程维护任务已排队",
+            details={
+                "taskId": task.id,
+                "kind": kind,
+                "total": task.total_count,
+                "includeMissing": include_missing,
+            },
         )
         background_tasks.add_task(
             run_generation_batch, queued_ids, settings, True, task.id

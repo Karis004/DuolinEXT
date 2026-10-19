@@ -225,12 +225,13 @@ export type DashboardData = {
     readyLessons: number
     outdatedLessons: number
     upgradeableLessons: number
+    unlearnedOutdatedLessons: number
     pendingLessons: number
     failedLessons: number
     incompleteLessons: number
     task: null | {
       id: number
-      kind: 'missing' | 'upgrade' | 'retry'
+      kind: 'missing' | 'upgrade' | 'retry' | 'upgrade-unlearned' | 'upgrade-unlearned-missing'
       status: 'queued' | 'running' | 'completed' | 'partial' | 'cancelled'
       total: number
       completed: number

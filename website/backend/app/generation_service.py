@@ -19,6 +19,7 @@ from .logging_service import log_event
 from .models import CourseSkill, GenerationTask, SessionLesson, SkillSession
 from .session_service import (
     get_or_create_session_lesson,
+    is_learning_completed,
     now,
     serialize_word,
     session_words,
@@ -501,6 +502,37 @@ def queue_incomplete_lessons(session: Session, settings: Settings) -> list[int]:
     return queued_ids
 
 
+def queue_unlearned_outdated_lessons(
+    session: Session,
+    settings: Settings,
+    *,
+    include_missing: bool = False,
+) -> list[int]:
+    """Queue outdated lessons that the user has not finished yet.
+
+    Learned lessons keep their existing content unless the user explicitly
+    chooses the full upgrade action. Missing lessons are optional so the
+    caller can offer either "upgrade unlearned" or the combined action.
+    """
+    queued_ids = []
+    for row in _eligible_sessions(session):
+        lesson = get_or_create_session_lesson(session, settings, row)
+        if lesson.generation_status in {"queued", "generating", "outlining"}:
+            continue
+        complete = _has_complete_lesson_payload(lesson)
+        if complete:
+            if is_learning_completed(row) or not lesson_needs_update(lesson):
+                continue
+        elif not include_missing:
+            continue
+        lesson.generation_status = "queued"
+        lesson.generation_error = None
+        session.add(lesson)
+        queued_ids.append(row.id)
+    session.commit()
+    return queued_ids
+
+
 def queue_failed_lessons(session: Session, settings: Settings) -> list[int]:
     queued_ids = []
     for row in _eligible_sessions(session):
@@ -694,6 +726,16 @@ def generation_progress_payload(session: Session) -> dict:
         and lessons[row.id].generation_status == "error"
         for row in eligible
     )
+    unlearned_outdated = 0
+    for row in eligible:
+        lesson = lessons.get(row.id)
+        if (
+            lesson is not None
+            and _has_complete_lesson_payload(lesson)
+            and lesson_needs_update(lesson)
+            and not is_learning_completed(row)
+        ):
+            unlearned_outdated += 1
     upgradeable = max(0, outdated - failed)
     task = active_generation_task(session)
     latest_task = session.exec(
@@ -706,6 +748,7 @@ def generation_progress_payload(session: Session) -> dict:
         "readyLessons": len(eligible) - incomplete - outdated,
         "outdatedLessons": incomplete + outdated,
         "upgradeableLessons": outdated,
+        "unlearnedOutdatedLessons": unlearned_outdated,
         "pendingLessons": pending,
         "failedLessons": failed,
         "incompleteLessons": incomplete,

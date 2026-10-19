@@ -56,7 +56,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.PROD ? ''
 const SELECTED_SESSION_KEY = 'duolinext.selectedSessionId'
 const LEGACY_SELECTED_SESSION_KEY = 'duolinex.selectedSessionId'
 
-type Operation = 'sync' | 'load' | 'generate' | 'upgrade' | 'retry' | 'generate-missing' | 'cancel' | 'complete' | null
+type Operation = 'sync' | 'load' | 'generate' | 'upgrade' | 'upgrade-unlearned' | 'upgrade-unlearned-missing' | 'retry' | 'generate-missing' | 'cancel' | 'complete' | null
 type LessonMode = 'pronunciation' | 'study'
 type ConnectionTarget = 'duolingo' | 'ai'
 
@@ -585,7 +585,7 @@ function SettingsPanel({
 
         <div className="settings-body">
           <section className="settings-section">
-            <div className="settings-section-heading"><Server size={18} /><div><h3>服务连接</h3><p>状态来自后端当前配置。本地开发修改 `website/.env` 后可点击重新读取；Docker 部署修改配置后需重建容器。</p></div></div>
+            <div className="settings-section-heading"><Server size={18} /><div><h3>服务连接</h3><p>状态来自后端当前配置。修改 `website/.env` 后点击重新读取即可；Docker 部署也支持热读取，数据库路径等启动配置仍需重启。</p></div></div>
             <div className="settings-actions">
               <button className="secondary-button" onClick={() => void reloadConfiguration()} disabled={reloading || testing !== null}>
                 {reloading ? <LoaderCircle size={15} className="spinning" /> : <RefreshCw size={15} />}重新读取配置
@@ -858,6 +858,7 @@ function LogsPanel({ onClose }: { onClose: () => void }) {
                 <span className="log-message">{entry.message}</span>
                 <span className="log-duration">{entry.durationMs != null ? `${entry.durationMs} ms` : ''}</span>
                 <span className="log-request">{entry.requestId ?? ''}</span>
+                <ChevronDown size={13} className="log-chevron" />
               </summary>
               <div className="log-detail">
                 <div className="log-detail-head">
@@ -1077,6 +1078,7 @@ function CourseOutlinePanel({
   onUpgrade,
   onRetry,
   onGenerateMissing,
+  onUpgradeUnlearned,
   onCancel,
   syncBusy,
 }: {
@@ -1086,6 +1088,7 @@ function CourseOutlinePanel({
   onUpgrade: () => void
   onRetry: () => void
   onGenerateMissing: () => void
+  onUpgradeUnlearned: (includeMissing: boolean) => void
   onCancel: () => void
   syncBusy: boolean
 }) {
@@ -1095,7 +1098,37 @@ function CourseOutlinePanel({
   const task = generation?.task
   const taskRunning = task !== null && task !== undefined && ['queued', 'running'].includes(task.status)
   const controlsBusy = operation !== null || taskRunning || syncBusy || Boolean(data?.syncInProgress)
-  const taskLabel = task?.kind === 'upgrade' ? '升级旧课程' : task?.kind === 'retry' ? '重试失败课程' : '生成未生成课程'
+  const taskLabel = task?.kind === 'upgrade'
+    ? '升级全部旧课'
+    : task?.kind === 'retry'
+      ? '重试失败课程'
+      : task?.kind === 'upgrade-unlearned'
+        ? '升级未学旧课'
+        : task?.kind === 'upgrade-unlearned-missing'
+          ? '升级未学旧课 + 生成缺失'
+          : '生成未生成课程'
+  const failedCount = generation?.failedLessons ?? 0
+  const incompleteCount = generation?.incompleteLessons ?? 0
+  const unlearnedCount = generation?.unlearnedOutdatedLessons ?? 0
+  const allOutdatedCount = generation?.upgradeableLessons ?? 0
+  const hasUnlearned = unlearnedCount > 0
+  const hasMissing = incompleteCount > 0
+  const primaryKind = hasUnlearned && hasMissing ? 'both' : hasUnlearned ? 'unlearned' : hasMissing ? 'missing' : null
+  const primaryOperation = primaryKind === 'both'
+    ? 'upgrade-unlearned-missing'
+    : primaryKind === 'unlearned'
+      ? 'upgrade-unlearned'
+      : 'generate-missing'
+  const primaryCount = primaryKind === 'both'
+    ? `${unlearnedCount} 节旧课 · ${incompleteCount} 节待生成`
+    : primaryKind === 'unlearned'
+      ? `${unlearnedCount} 节旧课`
+      : `${incompleteCount} 节待生成`
+  const runPrimaryAction = () => {
+    if (primaryKind === 'both') onUpgradeUnlearned(true)
+    else if (primaryKind === 'unlearned') onUpgradeUnlearned(false)
+    else onGenerateMissing()
+  }
   return (
     <aside className="outline-drawer" aria-label="课程大纲">
       <header className="outline-heading">
@@ -1121,24 +1154,74 @@ function CourseOutlinePanel({
           {task.cancelRequested ? '正在中断' : '中断生成'}
         </button>
       )}
-      {(generation?.failedLessons ?? 0) > 0 && (
-        <button className="retry-button" onClick={onRetry} disabled={controlsBusy || !data?.aiConfigured}>
-          {operation === 'retry' ? <LoaderCircle size={16} className="spinning" /> : <RotateCcw size={16} />}
-          重试 {generation?.failedLessons} 节失败课程
-        </button>
-      )}
-      {(generation?.upgradeableLessons ?? 0) > 0 && (
-        <button className="upgrade-button" onClick={onUpgrade} disabled={controlsBusy || !data?.aiConfigured}>
-          {operation === 'upgrade' ? <LoaderCircle size={16} className="spinning" /> : <RefreshCw size={16} />}
-          升级 {generation?.upgradeableLessons} 节旧课程
-        </button>
-      )}
-      {(generation?.incompleteLessons ?? 0) > 0 && (
-        <button className="upgrade-button" onClick={onGenerateMissing} disabled={controlsBusy || !data?.aiConfigured}>
-          {operation === 'generate-missing' ? <LoaderCircle size={16} className="spinning" /> : <Sparkles size={16} />}
-          生成 {generation?.incompleteLessons} 节未生成课程
-        </button>
-      )}
+
+      <section className="maintenance-panel">
+        <div className="maintenance-heading">
+          <strong>课程维护</strong>
+          <small>默认只处理未学完的课程，已学课程不会被覆盖。</small>
+        </div>
+
+        {primaryKind ? (
+          <button
+            className="maintenance-primary"
+            onClick={runPrimaryAction}
+            disabled={controlsBusy || !data?.aiConfigured}
+          >
+            {operation === primaryOperation
+              ? <LoaderCircle size={17} className="spinning" />
+              : primaryKind === 'missing'
+                ? <Sparkles size={17} />
+                : <RefreshCw size={17} />}
+            <span className="maintenance-primary-copy">
+              <strong>
+                {primaryKind === 'both'
+                  ? '升级未学旧课 + 生成缺失'
+                  : primaryKind === 'unlearned'
+                    ? '升级未学旧课'
+                    : '生成缺失课程'}
+              </strong>
+              <small>{primaryCount}</small>
+            </span>
+            <ChevronRight size={17} />
+          </button>
+        ) : (
+          <div className="maintenance-clear"><CheckCircle2 size={16} />没有待处理的未学习课程</div>
+        )}
+
+        {primaryKind === 'both' && (
+          <div className="maintenance-grid">
+            <button className="maintenance-card" onClick={() => onUpgradeUnlearned(false)} disabled={controlsBusy || !data?.aiConfigured}>
+              {operation === 'upgrade-unlearned' ? <LoaderCircle size={16} className="spinning" /> : <RefreshCw size={16} />}
+              <span><strong>仅升级未学旧课</strong><small>{unlearnedCount} 节</small></span>
+            </button>
+            <button className="maintenance-card" onClick={onGenerateMissing} disabled={controlsBusy || !data?.aiConfigured}>
+              {operation === 'generate-missing' ? <LoaderCircle size={16} className="spinning" /> : <Sparkles size={16} />}
+              <span><strong>仅生成缺失课程</strong><small>{incompleteCount} 节</small></span>
+            </button>
+          </div>
+        )}
+
+        {(failedCount > 0 || allOutdatedCount > 0) && (
+          <details className="maintenance-advanced">
+            <summary>全部课程与失败任务</summary>
+            <div className="maintenance-grid">
+              {failedCount > 0 && (
+                <button className="maintenance-card danger" onClick={onRetry} disabled={controlsBusy || !data?.aiConfigured}>
+                  {operation === 'retry' ? <LoaderCircle size={16} className="spinning" /> : <RotateCcw size={16} />}
+                  <span><strong>重试失败课程</strong><small>{failedCount} 节</small></span>
+                </button>
+              )}
+              {allOutdatedCount > 0 && (
+                <button className="maintenance-card" onClick={onUpgrade} disabled={controlsBusy || !data?.aiConfigured}>
+                  {operation === 'upgrade' ? <LoaderCircle size={16} className="spinning" /> : <RefreshCw size={16} />}
+                  <span><strong>升级全部旧课</strong><small>{allOutdatedCount} 节</small></span>
+                </button>
+              )}
+            </div>
+            <p>“升级全部旧课”会重新生成已学完的课程内容。</p>
+          </details>
+        )}
+      </section>
 
       {content ? (
         <div className="outline-content">
@@ -1417,6 +1500,15 @@ export default function App() {
             onGenerateMissing={() => {
               const query = selected ? `?selected_session_id=${selected.id}` : ''
               void runDashboardAction('generate-missing', () => api(`/api/lessons/generate-missing${query}`, { method: 'POST' }))
+            }}
+            onUpgradeUnlearned={(includeMissing) => {
+              const params = new URLSearchParams()
+              if (selected) params.set('selected_session_id', String(selected.id))
+              params.set('include_missing', includeMissing ? 'true' : 'false')
+              void runDashboardAction(
+                includeMissing ? 'upgrade-unlearned-missing' : 'upgrade-unlearned',
+                () => api(`/api/lessons/upgrade-unlearned?${params.toString()}`, { method: 'POST' }),
+              )
             }}
             onCancel={() => {
               void runDashboardAction('cancel', () => api('/api/lessons/generation/cancel', { method: 'POST' }))
