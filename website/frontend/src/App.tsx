@@ -576,7 +576,11 @@ function SettingsPanel({
       : '请在系统语言或辅助功能设置中安装法语语音，然后重启浏览器。'
 
   return (
-    <div className="settings-overlay" role="presentation">
+    <div
+      className="settings-overlay"
+      role="presentation"
+      onClick={(event) => { if (event.target === event.currentTarget) onClose() }}
+    >
       <div className="settings-panel" role="dialog" aria-modal="true" aria-label="设置">
         <header className="settings-heading">
           <div><span className="eyebrow">Configuration</span><h2>设置</h2></div>
@@ -673,19 +677,74 @@ function SettingsPanel({
 function VocabularyPanel({ data, onClose }: { data: VocabularyData | null; onClose: () => void }) {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('全部')
+  const [generating, setGenerating] = useState(false)
+  const [actionMessage, setActionMessage] = useState('')
+  const [actionError, setActionError] = useState('')
   const items = (data?.items ?? []).filter((item) => {
     const matchesQuery = !query.trim() || `${item.word} ${item.lemma} ${item.meaning}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())
     const matchesFilter = filter === '全部' || item.partOfSpeech === filter
     return matchesQuery && matchesFilter
   })
   const filters = ['全部', '动词', '名词', '形容词', '其他']
+  const failedCount = data?.failed ?? 0
+  const pendingCount = data?.pending ?? 0
+  const taskRunning = Boolean(data?.task && ['queued', 'running'].includes(data.task.status))
+  const canGenerate = pendingCount > 0 && !taskRunning && !generating
+
+  const generate = async () => {
+    if (!canGenerate) return
+    setGenerating(true)
+    setActionError('')
+    setActionMessage('')
+    try {
+      const result = await api<{ queued: number; message?: string }>('/api/vocabulary/retry', { method: 'POST' })
+      setActionMessage(
+        result.queued
+          ? `已加入生成队列：${result.queued} 个词形资料。`
+          : result.message ?? '没有需要生成的词形资料。',
+      )
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : '生成词形资料失败')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
   return (
-    <div className="vocabulary-overlay">
-      <div className="vocabulary-panel">
-        <header className="vocabulary-heading"><div><span className="eyebrow">Vocabulary</span><h2>词汇表</h2></div><button className="drawer-close" onClick={onClose} title="关闭词汇表"><X size={20} /></button></header>
+    <div
+      className="vocabulary-overlay"
+      role="presentation"
+      onClick={(event) => { if (event.target === event.currentTarget) onClose() }}
+    >
+      <div className="vocabulary-panel" role="dialog" aria-modal="true" aria-label="词汇表">
+        <header className="vocabulary-heading">
+          <div><span className="eyebrow">Vocabulary</span><h2>词汇表</h2></div>
+          <div className="vocabulary-heading-actions">
+            {(pendingCount > 0 || taskRunning) && (
+              <button
+                className="secondary-button vocabulary-generate"
+                onClick={() => void generate()}
+                disabled={!canGenerate}
+                title="生成所有未完成或失败的词形资料"
+              >
+                {generating || taskRunning ? <LoaderCircle size={15} className="spinning" /> : <Sparkles size={15} />}
+                <span>
+                  {taskRunning
+                    ? '正在生成'
+                    : failedCount > 0
+                      ? `重试失败 ${failedCount}`
+                      : `生成未完成 ${pendingCount}`}
+                </span>
+              </button>
+            )}
+            <button className="drawer-close" onClick={onClose} title="关闭词汇表"><X size={20} /></button>
+          </div>
+        </header>
+        {actionError && <div className="inline-error">{actionError}</div>}
         <div className="vocabulary-toolbar"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索单词或含义" /> <div className="vocabulary-filters">{filters.map((item) => <button key={item} className={filter === item ? 'active' : ''} onClick={() => setFilter(item)}>{item}</button>)}</div></div>
         {data?.task && ['queued', 'running'].includes(data.task.status) && <div className="outline-progress"><LoaderCircle size={15} className="spinning" />正在整理词形 {data.task.completed} / {data.task.total}</div>}
-        {data?.pending ? <p className="vocabulary-pending">还有 {data.pending} 个词形资料尚未生成。</p> : null}
+        {data?.pending ? <p className="vocabulary-pending">还有 {data.pending} 个词形资料尚未完成{failedCount > 0 ? `，其中 ${failedCount} 个失败` : ''}。</p> : null}
+        {actionMessage && <p className="vocabulary-action-message">{actionMessage}</p>}
         <div className="vocabulary-list">
           {items.map((item) => <details className="vocabulary-row" key={item.word}><summary><button className="vocabulary-word" onClick={(event) => { event.preventDefault(); void playFrench(item.word) }}>{item.word}</button><span>{item.lemma}{item.gender && item.gender !== '不适用' ? ` · ${item.gender}` : ''}</span><small>{item.meaning || item.translations.slice(0, 2).join(' · ')}</small><ChevronDown size={15} /></summary><div className="vocabulary-detail">{item.usageNote && <p>{item.usageNote}</p>}{item.forms.map((form) => <div key={`${form.form}-${form.label}`}><button className="vocabulary-form" onClick={() => void playFrench(form.form)}>{form.form}</button><span>{form.label}</span><small>{form.note}</small></div>)}</div></details>)}
           {!items.length && <div className="outline-empty"><Library size={25} /><p>没有匹配的词汇。</p></div>}
@@ -799,7 +858,11 @@ function LogsPanel({ onClose }: { onClose: () => void }) {
   ]
 
   return (
-    <div className="logs-overlay" role="presentation">
+    <div
+      className="logs-overlay"
+      role="presentation"
+      onClick={(event) => { if (event.target === event.currentTarget) onClose() }}
+    >
       <div className="logs-panel" role="dialog" aria-modal="true" aria-label="运行日志">
         <header className="settings-heading">
           <div><span className="eyebrow">Developer logs</span><h2>运行日志</h2></div>
@@ -1157,8 +1220,11 @@ function CourseOutlinePanel({
 
       <section className="maintenance-panel">
         <div className="maintenance-heading">
-          <strong>课程维护</strong>
-          <small>默认只处理未学完的课程，已学课程不会被覆盖。</small>
+          <div>
+            <strong>课程维护</strong>
+            <small>默认只处理未学完的课程，已学课程不会被覆盖。</small>
+          </div>
+          {allOutdatedCount > 0 && <span className="maintenance-count">全部旧课 {allOutdatedCount}</span>}
         </div>
 
         {primaryKind ? (
@@ -1452,7 +1518,6 @@ export default function App() {
           <button className="outline-button" onClick={() => setOutlineOpen(true)}>
             <ScrollText size={16} />
             <span>课程大纲</span>
-            {((data?.generation.outdatedLessons ?? 0) + (data?.generation.failedLessons ?? 0)) > 0 && <b>{(data?.generation.outdatedLessons ?? 0) + (data?.generation.failedLessons ?? 0)}</b>}
           </button>
           <button className="outline-button" onClick={() => setVocabularyOpen(true)} title="打开词汇表"><Library size={16} /><span>词汇表</span></button>
           <button className="outline-button" onClick={() => setLogsOpen(true)} title="打开运行日志"><Terminal size={16} /><span>日志</span></button>

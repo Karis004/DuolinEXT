@@ -78,6 +78,7 @@ DuolinEXT 是单用户、本地优先的法语辅助学习应用。用户继续�
 - 控件：标准高度 `--control-h`（38px），紧凑控件 `--control-h-sm`（34px），圆角 `--radius`（4px），过渡 `--transition`。
 - 视觉语言保持编辑式网格：细线分隔、少阴影、方形品牌块、衬线法语、无衬线 UI；不要引入大圆角卡片或渐变。
 - 响应式断点：980px 隐藏日期，760px 顶栏只留图标并启用侧栏抽屉，480px 进一步压缩间距；新增顶栏按钮时要检查 320px 宽度不溢出。
+- 模态面板（词汇表、设置、日志、课程大纲）header 固定吸顶，点击面板外的灰色遮罩关闭；新增弹层沿用这两条交互，不要让关闭按钮跟随内容滚出视口。
 
 ## 4. 数据模型
 
@@ -164,7 +165,9 @@ DuolinEXT 是单用户、本地优先的法语辅助学习应用。用户继续�
 - 已是当前 prompt version 且 `ready` 的 Lexeme 不重复生成。
 - 写入新 profile 时先删除旧 `LexemeForm` 并 `flush()`，再插入新词形。
 - 超过 3 分钟无进度的 running 任务会标记为 cancelled。
-- 打开词汇表且存在待处理词时，可自动创建词形任务。
+- 打开词汇表且存在待处理词时，可自动创建词形任务；自动队列不会重试当前 prompt version 的 error。
+- `POST /api/vocabulary/retry` 是主动重试入口，使用 `queue_vocabulary_words(..., retry_errors=True)`，会同时处理 pending 和当前版本的 error，供词汇表头部按钮调用。
+- 词汇表头部按钮在 `pending > 0` 时显示失败数或待生成数；任务运行期间禁用并显示进度。
 
 `playFrench(text, audioUrl?)` 有多邻国音频时优先播放，失败后回退浏览器语音。词汇表故意不传音频 URL。语音不再通过 `frontend/.env.local` 配置：前端自动检测 `SpeechSynthesis` 法语语音，自动模式优先 `localService=false` 的浏览器在线语音，再回退 `localService=true` 的设备语音。用户选择保存在 `duolinext.frenchVoicePreference`。
 
@@ -210,6 +213,7 @@ Session 选择保存在 `duolinext.selectedSessionId`。前端会读取并清理
 - `POST /api/lessons/generation/cancel`
 - `POST /api/tutor/ask`
 - `GET /api/vocabulary`
+- `POST /api/vocabulary/retry`
 - `GET /api/words`
 - `GET /api/logs`（支持 `limit`、`level`、`category`、`q`、`after_id`）
 - `DELETE /api/logs`

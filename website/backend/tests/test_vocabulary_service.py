@@ -144,6 +144,38 @@ def test_queue_retries_only_errors_from_an_older_prompt_version():
     assert queued == [old_error_id]
 
 
+def test_queue_can_retry_current_version_errors_and_pending_words():
+    engine = create_engine("sqlite://")
+    SQLModel.metadata.create_all(engine)
+    settings = Settings(database_url="sqlite://", _env_file=None)
+    with Session(engine) as session:
+        now = datetime.now()
+        failed = Word(text="merci", first_seen_at=now, last_seen_at=now)
+        pending = Word(text="bonjour", first_seen_at=now, last_seen_at=now)
+        session.add_all([failed, pending])
+        session.commit()
+        session.refresh(failed)
+        session.refresh(pending)
+        failed_lexeme = Lexeme(
+            lemma="merci",
+            generation_status="error",
+            generation_version=VOCABULARY_PROMPT_VERSION,
+        )
+        session.add(failed_lexeme)
+        session.commit()
+        session.refresh(failed_lexeme)
+        session.add(WordLexeme(word_id=failed.id, lexeme_id=failed_lexeme.id))
+        session.commit()
+        failed_id = failed.id
+        pending_id = pending.id
+
+        queued = queue_vocabulary_words(session, settings, retry_errors=True)
+        failed_status = failed_lexeme.generation_status
+
+    assert set(queued) == {failed_id, pending_id}
+    assert failed_status == "queued"
+
+
 def test_stale_vocabulary_task_is_cancelled_and_unlocked():
     engine = create_engine("sqlite://")
     SQLModel.metadata.create_all(engine)

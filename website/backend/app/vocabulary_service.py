@@ -14,7 +14,12 @@ from .session_service import now, serialize_word
 VOCABULARY_TASK_STALE_AFTER = timedelta(minutes=3)
 
 
-def queue_vocabulary_words(session: Session, settings: Settings) -> list[int]:
+def queue_vocabulary_words(
+    session: Session,
+    settings: Settings,
+    *,
+    retry_errors: bool = False,
+) -> list[int]:
     queued: list[int] = []
     for word in session.exec(select(Word).order_by(col(Word.id))).all():
         links = session.exec(
@@ -28,7 +33,7 @@ def queue_vocabulary_words(session: Session, settings: Settings) -> list[int]:
             for lexeme in links
         ):
             continue
-        if links and all(
+        if not retry_errors and links and all(
             lexeme.generation_status == "error"
             and lexeme.generation_version >= VOCABULARY_PROMPT_VERSION
             for lexeme in links

@@ -707,9 +707,11 @@ def vocabulary(
     latest = session.exec(
         select(VocabularyTask).order_by(col(VocabularyTask.id).desc())
     ).first()
+    items = vocabulary_payload(session)
     return {
-        "items": vocabulary_payload(session),
+        "items": items,
         "pending": vocabulary_pending_count(session),
+        "failed": sum(item["status"] == "error" for item in items),
         "task": (
             {
                 "id": (task or latest).id,
@@ -721,6 +723,54 @@ def vocabulary(
             if task or latest
             else None
         ),
+    }
+
+
+@app.post("/api/vocabulary/retry")
+def retry_vocabulary(
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    if not settings.ai_configured:
+        raise HTTPException(status_code=400, detail="AI 尚未配置。")
+    if sync_in_progress(session):
+        raise HTTPException(status_code=409, detail="多邻国同步正在进行，请稍后再生成词汇。")
+    if active_generation_task(session) is not None:
+        raise HTTPException(status_code=409, detail="课程生成正在进行，请稍后再生成词汇。")
+    if active_vocabulary_task(session) is not None:
+        raise HTTPException(status_code=409, detail="词汇表正在整理中，请稍后再试。")
+    word_ids = queue_vocabulary_words(
+        session,
+        settings,
+        retry_errors=True,
+    )
+    if not word_ids:
+        return {
+            "success": True,
+            "queued": 0,
+            "message": "没有需要生成或重试的词形资料。",
+        }
+    task = create_vocabulary_task(session, settings, word_ids)
+    log_event(
+        "INFO",
+        "vocabulary",
+        "手动生成词形任务已排队",
+        details={"taskId": task.id, "words": len(word_ids)},
+    )
+    background_tasks.add_task(
+        run_vocabulary_batch, word_ids, settings, task.id
+    )
+    return {
+        "success": True,
+        "queued": len(word_ids),
+        "task": {
+            "id": task.id,
+            "status": task.status,
+            "total": task.total_count,
+            "completed": task.completed_count,
+            "failed": task.failed_count,
+        },
     }
 
 

@@ -22,6 +22,7 @@ export type VocabularyItem = {
 export type VocabularyData = {
   items: VocabularyItem[]
   pending: number
+  failed: number
   task: null | {
     id: number
     status: 'queued' | 'running' | 'completed' | 'partial' | 'cancelled'
